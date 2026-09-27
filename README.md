@@ -272,13 +272,36 @@ Download the latest pre-compiled JARs directly to add them to your project's cla
 > [!IMPORTANT]
 > Both JARs must be present in your classpath for FastMonitor's native functions to operate correctly.
 
-### Driver Setup (Virtual Display Driver / Parsec VDD)
+### Option 4: Driver Setup (Hardware-Accelerated Virtual Displays)
 
-To allow Windows to register authentic virtual display outputs, ensure a compatible Indirect Display Driver (IDD) is installed:
-1. Download the [Parsec VDD](https://github.com/nomi-san/parsec-vdd) or [Virtual-Display-Driver](https://github.com/itsmikethetech/Virtual-Display-Driver) package.
-2. Install the driver certificate into the Windows **Trusted Root Certification Authorities** store.
-3. Add the device via Windows Device Manager (*Action* → *Add Legacy Hardware* → *Display Adapters* → *Have Disk*).
-4. FastMonitor will instantly detect the driver interface GUID and begin managing virtual displays.
+FastMonitor runs out of the box in **Emulation Mode** (software state tracking for CI and unit tests without hardware drivers). For **real Windows OS topology changes**, DXGI Desktop Duplication capture, and OBS streaming isolation, install the signed open-source IDD driver:
+
+> [!NOTE]
+> FastMonitor interfaces with the standard Microsoft Indirect Display Driver (IDD) interface via the [Parsec VDD specification](https://github.com/nomi-san/parsec-vdd).
+
+#### Automated Driver Install (PowerShell as Administrator)
+
+```powershell
+# 1. Download official Virtual Display Driver (Parsec IDD) package
+Invoke-WebRequest -Uri "https://github.com/itsmikethetech/Virtual-Display-Driver/releases/latest/download/Virtual-Display-Driver.zip" -OutFile "$env:TEMP\vdd.zip"
+Expand-Archive -Path "$env:TEMP\vdd.zip" -DestinationPath "$env:TEMP\vdd" -Force
+
+# 2. Install driver certificate to Trusted Root Store
+certutil -addstore -f "Root" "$env:TEMP\vdd\vdd.cer"
+
+# 3. Install and register IDD device via Device Console (pnputil)
+pnputil /add-driver "$env:TEMP\vdd\vdd.inf" /install
+```
+
+#### Verification
+
+```powershell
+# Check if driver device interface is active
+Get-PnpDevice -FriendlyName "*Virtual Display*"
+```
+
+* **No driver installed?** FastMonitor automatically falls back to deterministic software emulation without crashing (`FastMonitor.isDriverPresent()` returns `false`).
+* **Driver installed?** Windows automatically exposes authentic DXGI display outputs up to 8K @ 500 Hz visible in Windows Display Settings.
 
 ---
 
