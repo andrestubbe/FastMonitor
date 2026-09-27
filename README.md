@@ -286,11 +286,12 @@ Get-PnpDevice -FriendlyName "*Virtual Display*"
 
 ## Technical Examples & Hero Demos
 
-See the `examples/` directory for ready-to-run implementations:
+See the `examples/` directory for ready-to-run interactive implementations, benchmarks, and tests:
 
 | Example / Demo | Description | Path | Run Command |
 |---|---|---|---|
-| **Visual Showcase Hero Demo** | Demonstrates creating, activating, reconfiguring, and inspecting virtual displays in real time. | [`examples/Demo/Demo.java`](examples/Demo/src/main/java/fastmonitor/Demo.java) | `run-demo.bat` |
+| **Visual Showcase Hero Demo** | Demonstrates creating, activating, reconfiguring resolution/refresh rate, and tearing down virtual displays with real-time JSON topology inspection. | [`examples/Demo/Demo.java`](examples/Demo/src/main/java/fastmonitor/Demo.java) | `run-demo.bat` |
+| **High-Precision JMH Benchmarks** | Standardized microbenchmarks measuring virtual display allocation throughput, mode reconfiguration latency, and zero-heap memory pressure. | [`examples/Benchmark`](examples/Benchmark) | `run-benchmark.bat` |
 
 ---
 
