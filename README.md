@@ -248,9 +248,12 @@ Download the latest pre-compiled JARs directly to add them to your project's cla
 > [!IMPORTANT]
 > Both JARs must be present in your classpath for FastMonitor's native functions to operate correctly.
 
-### Option 4: Driver Setup (Hardware-Accelerated Virtual Displays)
+### Additional Requirement: Virtual Display Driver (IDD) Setup
 
-FastMonitor runs out of the box in **Emulation Mode** (software state tracking for CI and unit tests without hardware drivers). For **real Windows OS topology changes**, DXGI Desktop Duplication capture, and OBS streaming isolation, install the signed open-source IDD driver:
+To create **genuine Windows OS display outputs** visible in Windows 10/11 Display Settings, DXGI Desktop Duplication, OBS Studio, and games, you must install the signed open-source Indirect Display Driver (IDD):
+
+> [!IMPORTANT]
+> Without this driver, FastMonitor operates in **Emulation Mode** (software mock state for headless CI and unit tests). Installing this driver is required for real hardware-accelerated display outputs.
 
 > [!NOTE]
 > FastMonitor interfaces with the standard Microsoft Indirect Display Driver (IDD) interface via the [Parsec VDD specification](https://github.com/nomi-san/parsec-vdd).
