@@ -83,6 +83,7 @@ public final class FastMonitor implements AutoCloseable {
             }
             boolean ok = FastMonitorNative.initBackend();
             if (ok) {
+                BACKEND_GENERATION.incrementAndGet();
                 INITIALIZED.set(true);
             }
             return ok;
@@ -97,7 +98,6 @@ public final class FastMonitor implements AutoCloseable {
             return;
         }
         FastMonitorNative.shutdownBackend();
-        BACKEND_GENERATION.incrementAndGet();
         INITIALIZED.set(false);
     }
 
@@ -204,7 +204,8 @@ public final class FastMonitor implements AutoCloseable {
                 newConfig.refreshHz
         );
         if (ok) {
-            this.config = newConfig;
+            // Note: mode is reconfigured; name is retained from original creation
+            this.config = new Config(newConfig.width, newConfig.height, newConfig.refreshHz, cur.name);
         }
         return ok;
     }
@@ -235,6 +236,10 @@ public final class FastMonitor implements AutoCloseable {
             return false;
         }
         try {
+            if (!INITIALIZED.get() || generation != BACKEND_GENERATION.get()) {
+                state.set(STATE_CLOSED);
+                return false;
+            }
             boolean ok = FastMonitorNative.destroyVirtualMonitor(id);
             state.set(ok ? STATE_CLOSED : STATE_OPEN);
             return ok;

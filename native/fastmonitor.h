@@ -32,6 +32,7 @@ struct FastVirtualMonitor {
     int height;
     int refreshHz;
     std::string name;
+    std::string deviceName;
     bool active;
 
     FastVirtualMonitor(int logicalId_,
@@ -39,13 +40,15 @@ struct FastVirtualMonitor {
                        int w,
                        int h,
                        int hz,
-                       std::string n)
+                       std::string n,
+                       std::string devName = "")
         : logicalId(logicalId_),
           driverIndex(driverIndex_),
           width(w),
           height(h),
           refreshHz(hz),
           name(std::move(n)),
+          deviceName(std::move(devName)),
           active(true) {}
 };
 
