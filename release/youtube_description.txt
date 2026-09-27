@@ -1,0 +1,15 @@
+⚡ FastMonitor 0.1.0 — High-Performance Native Virtual Display Engine for Java
+
+Create, reconfigure, and control true Windows 11 virtual monitors directly from Java at 60–500 Hz with sub-microsecond latency and zero GC pauses.
+
+🔗 GitHub Repository:
+https://github.com/andrestubbe/FastMonitor
+
+🚀 Key Features:
+- Direct Windows Indirect Display Driver (IDD) & Parsec VDD integration
+- 60–500 Hz refresh rates, up to 8K resolutions
+- Zero JVM garbage collection allocations
+- Seamless interop with FastScreen, FastGPU, FastVulkan, and FastRobot
+- Pure Java 17+ API backed by FastCore
+
+#Java #Windows11 #FastJava #VirtualDisplay #IDD #DirectX #JNI #LowLatency
