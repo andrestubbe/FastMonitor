@@ -261,15 +261,15 @@ To create **genuine Windows OS display outputs** visible in Windows 10/11 Displa
 #### Automated Driver Install (PowerShell as Administrator)
 
 ```powershell
-# 1. Download official Virtual Display Driver (Parsec IDD) package
-Invoke-WebRequest -Uri "https://github.com/itsmikethetech/Virtual-Display-Driver/releases/latest/download/Virtual-Display-Driver.zip" -OutFile "$env:TEMP\vdd.zip"
+# 1. Download official signed Virtual Display Driver (x64)
+Invoke-WebRequest -Uri "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.5.2/Signed-Driver-v24.12.24-x64.zip" -OutFile "$env:TEMP\vdd.zip"
 Expand-Archive -Path "$env:TEMP\vdd.zip" -DestinationPath "$env:TEMP\vdd" -Force
 
 # 2. Install driver certificate to Trusted Root Store
-certutil -addstore -f "Root" "$env:TEMP\vdd\vdd.cer"
+certutil -addstore -f "Root" "$env:TEMP\vdd\ParsecVDA.cer"
 
 # 3. Install and register IDD device via Device Console (pnputil)
-pnputil /add-driver "$env:TEMP\vdd\vdd.inf" /install
+pnputil /add-driver "$env:TEMP\vdd\ParsecVDA.inf" /install
 ```
 
 #### Verification
