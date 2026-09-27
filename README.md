@@ -270,6 +270,9 @@ certutil -addstore -f "Root" "$env:TEMP\vdd\ParsecVDA.cer"
 
 # 3. Install and register IDD device via Device Console (pnputil)
 pnputil /add-driver "$env:TEMP\vdd\ParsecVDA.inf" /install
+
+# 4. Clean up temporary files
+Remove-Item -Path "$env:TEMP\vdd.zip", "$env:TEMP\vdd" -Recurse -Force
 ```
 
 #### Verification
@@ -277,6 +280,19 @@ pnputil /add-driver "$env:TEMP\vdd\ParsecVDA.inf" /install
 ```powershell
 # Check if driver device interface is active
 Get-PnpDevice -FriendlyName "*Virtual Display*"
+```
+
+#### Uninstallation (PowerShell as Administrator)
+
+```powershell
+# 1. Find the published INF name (e.g. oemXX.inf)
+$oem = (pnputil /enum-drivers | Select-String -Pattern "ParsecVDA.inf" -Context 1,0 | ForEach-Object { $_.Context.PreContext[0] -replace "Published Name:\s+", "" }).Trim()
+
+# 2. Delete driver package from Windows Driver Store
+if ($oem) { pnputil /delete-driver $oem /uninstall /force }
+
+# 3. Remove certificate from Trusted Root Store
+Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -like "*Parsec*" -or $_.Subject -like "*Virtual Display*" } | Remove-Item
 ```
 
 * **No driver installed?** FastMonitor automatically falls back to deterministic software emulation without crashing (`FastMonitor.isDriverPresent()` returns `false`).
