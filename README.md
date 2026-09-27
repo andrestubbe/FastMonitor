@@ -59,8 +59,6 @@ public class Demo {
 - [Key Features](#key-features)
 - [Real-World Use Cases](#real-world-use-cases)
 - [Architecture & Pipeline](#architecture--pipeline)
-- [Architecture Decision: JNI vs. FFM](#architecture-decision-jni-vs-ffm)
-- [FastJava Ecosystem Synergy](#fastjava-ecosystem-synergy)
 - [Performance Characteristics](#performance-characteristics)
 - [API Quick Reference](#api-quick-reference)
 - [Driver Architecture & Integration](#driver-architecture--integration)
@@ -147,28 +145,6 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 │       (FastScreen Capture / FastGPU SwapChain Target)       │
 └─────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## Architecture Decision: JNI vs. FFM
-
-FastMonitor intentionally relies on optimized **JNI** bindings backed by **FastCore** rather than Java 22+ Foreign Function & Memory (FFM):
-
-1. **Java 17 LTS Baseline Consistency**: The entire FastJava suite (140+ libraries) standardizes on Java 17 LTS as its supported baseline. FFM (`java.lang.foreign`) was only finalized in Java 22, which would break backward compatibility across enterprise and LTS deployments.
-2. **Encapsulation of Complex Win32 Driver Interfaces**: Interacting with Windows display drivers requires `SetupAPI` device enumeration with variable-length struct layouts (`SP_DEVICE_INTERFACE_DETAIL_DATA`), overlapped Win32 I/O, device IOCTL marshalling, and a native watchdog thread. Implementing these in pure Java FFM would require thousands of lines of fragile manual struct padding and off-heap memory management, whereas C++ compiles them cleanly into a hardened, high-performance binary.
-3. **Future Panama Upgrade Path**: FastCore already encapsulates FFM symbol lookups; once FastJava transitions its baseline beyond Java 21, FastMonitor can expose optional zero-glue FFM downcall handles without altering its public API.
-
----
-
-## FastJava Ecosystem Synergy
-
-FastMonitor integrates cleanly into the modular FastJava ecosystem:
-
-*   **FastMonitor**: Creates and configures the virtual display output topology.
-*   **FastScreen**: Captures the virtual display via DXGI Desktop Duplication with zero latency.
-*   **FastGPU**: Mounts high-speed rendering pipelines and swapchains directly onto the monitor.
-*   **FastRobot**: Injects inputs and automates workflows inside the virtual desktop boundaries.
-*   **FastCore**: Powers zero-dependency runtime library extraction.
 
 ---
 
