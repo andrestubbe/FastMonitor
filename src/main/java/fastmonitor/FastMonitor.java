@@ -2,6 +2,7 @@ package fastmonitor;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * High-performance virtual monitor and display topology controller for Java.
@@ -17,6 +18,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class FastMonitor implements AutoCloseable {
 
     private static final AtomicBoolean INITIALIZED = new AtomicBoolean(false);
+
+    private static final int STATE_OPEN = 0;
+    private static final int STATE_DESTROYING = 1;
+    private static final int STATE_CLOSED = 2;
 
     /**
      * Configuration specification for a virtual monitor.
@@ -51,7 +56,7 @@ public final class FastMonitor implements AutoCloseable {
 
     private final int id;
     private volatile Config config;
-    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicInteger state = new AtomicInteger(STATE_OPEN);
 
     private FastMonitor(int id, Config config) {
         this.id = id;
@@ -111,12 +116,12 @@ public final class FastMonitor implements AutoCloseable {
      *
      * @param config the monitor resolution, refresh rate, and identifier
      * @return a new FastMonitor instance
-     * @throws IllegalStateException if the driver call fails
+     * @throws IllegalStateException if backend initialization or driver creation fails
      */
     public static FastMonitor create(Config config) {
         Objects.requireNonNull(config, "config");
-        if (!INITIALIZED.get()) {
-            init();
+        if (!INITIALIZED.get() && !init()) {
+            throw new IllegalStateException("FastMonitor backend initialization failed");
         }
         int id = FastMonitorNative.createVirtualMonitor(
                 config.width,
@@ -138,20 +143,25 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     /**
-     * Returns the current configuration of this monitor.
+     * Returns the current configuration snapshot of this monitor.
      */
     public Config config() {
         return config;
     }
 
     /**
-     * Reconfigures resolution and refresh rate using primitive values (zero-allocation hot-path).
+     * Reconfigures resolution and refresh rate using primitive values.
+     * Skips allocation if dimensions and refresh rate are identical.
      */
     public boolean reconfigure(int width, int height, int refreshHz) {
         checkNotClosed();
+        Config cur = this.config;
+        if (cur.width == width && cur.height == height && cur.refreshHz == refreshHz) {
+            return true;
+        }
         boolean ok = FastMonitorNative.configureVirtualMonitor(id, width, height, refreshHz);
         if (ok) {
-            this.config = new Config(width, height, refreshHz, this.config.name);
+            this.config = new Config(width, height, refreshHz, cur.name);
         }
         return ok;
     }
@@ -162,6 +172,10 @@ public final class FastMonitor implements AutoCloseable {
     public boolean reconfigure(Config newConfig) {
         checkNotClosed();
         Objects.requireNonNull(newConfig, "newConfig");
+        Config cur = this.config;
+        if (cur.width == newConfig.width && cur.height == newConfig.height && cur.refreshHz == newConfig.refreshHz && cur.name.equals(newConfig.name)) {
+            return true;
+        }
         boolean ok = FastMonitorNative.configureVirtualMonitor(
                 id,
                 newConfig.width,
@@ -194,12 +208,14 @@ public final class FastMonitor implements AutoCloseable {
      * Destroys this virtual monitor and detaches it from Windows.
      */
     public boolean destroy() {
-        if (closed.get()) {
+        if (!state.compareAndSet(STATE_OPEN, STATE_DESTROYING)) {
             return false;
         }
         boolean ok = FastMonitorNative.destroyVirtualMonitor(id);
         if (ok) {
-            closed.set(true);
+            state.set(STATE_CLOSED);
+        } else {
+            state.set(STATE_OPEN); // Allow retry if native call failed
         }
         return ok;
     }
@@ -217,8 +233,8 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     private void checkNotClosed() {
-        if (closed.get()) {
-            throw new IllegalStateException("Virtual monitor #" + id + " has already been destroyed.");
+        if (state.get() != STATE_OPEN) {
+            throw new IllegalStateException("Virtual monitor #" + id + " is not open.");
         }
     }
 }

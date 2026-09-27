@@ -2,10 +2,9 @@
 
 #include <setupapi.h>
 #include <initguid.h>
-#include <mutex>
-#include <atomic>
 #include <algorithm>
 #include <sstream>
+#include <cstdio>
 
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "user32.lib")
@@ -21,44 +20,30 @@ static HANDLE g_keepaliveThread = nullptr;
 static std::atomic<bool> g_keepRunning{false};
 
 // ---------------------------------------------------------
-// Fast Stack-Based IOCTL Dispatcher
+// Synchronous Zero-Allocation IOCTL Dispatcher
 // ---------------------------------------------------------
 
-static DWORD vdd_ioctl(HANDLE h, DWORD code, const void* inData = nullptr, size_t inSize = 0) {
+static bool vdd_ioctl(HANDLE h, DWORD code, const void* inData = nullptr, DWORD inSize = 0, void* outData = nullptr, DWORD outSize = 0, DWORD* bytesOut = nullptr) {
     if (h == INVALID_HANDLE_VALUE) {
-        return static_cast<DWORD>(-1);
+        return false;
     }
 
-    BYTE inBuf[32]{};
-    if (inData && inSize > 0) {
-        memcpy(inBuf, inData, (inSize < 32) ? inSize : 32);
-    }
-
-    OVERLAPPED ov{};
-    ov.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-    if (!ov.hEvent) {
-        return static_cast<DWORD>(-1);
-    }
-
-    DWORD outVal = 0;
-    DWORD bytesReturned = 0;
+    DWORD returned = 0;
     BOOL ok = DeviceIoControl(
         h,
         code,
-        inBuf,
-        sizeof(inBuf),
-        &outVal,
-        sizeof(outVal),
-        &bytesReturned,
-        &ov
+        const_cast<void*>(inData),
+        inSize,
+        outData,
+        outSize,
+        &returned,
+        nullptr
     );
 
-    if (!ok && GetLastError() == ERROR_IO_PENDING) {
-        ok = GetOverlappedResult(h, &ov, &bytesReturned, TRUE);
+    if (bytesOut) {
+        *bytesOut = returned;
     }
-
-    CloseHandle(ov.hEvent);
-    return ok ? outVal : static_cast<DWORD>(-1);
+    return ok == TRUE;
 }
 
 // ---------------------------------------------------------
@@ -102,7 +87,7 @@ static HANDLE open_vdd_handle() {
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 nullptr,
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED | FILE_FLAG_WRITE_THROUGH,
+                FILE_ATTRIBUTE_NORMAL,
                 nullptr
             );
 
@@ -146,30 +131,69 @@ static DWORD WINAPI keepalive_thread_proc(LPVOID) {
 }
 
 // ---------------------------------------------------------
-// Win32 Display Configuration Helper (ChangeDisplaySettingsEx)
+// Win32 Display Configuration Helper (outside global lock)
 // ---------------------------------------------------------
 
-static bool apply_display_mode(int driverIndex, int width, int height, int refreshHz) {
+static bool apply_display_mode(int /*driverIndex*/, int width, int height, int refreshHz) {
     DISPLAY_DEVICEA dd{};
     dd.cb = sizeof(dd);
 
     for (DWORD i = 0; EnumDisplayDevicesA(nullptr, i, &dd, 0); ++i) {
-        if (strstr(dd.DeviceString, "Parsec") || strstr(dd.DeviceID, "Parsec") || strstr(dd.DeviceID, "VDA")) {
-            DEVMODEA dm{};
-            dm.dmSize = sizeof(dm);
-            dm.dmPelsWidth = static_cast<DWORD>(width);
-            dm.dmPelsHeight = static_cast<DWORD>(height);
-            dm.dmDisplayFrequency = static_cast<DWORD>(refreshHz);
-            dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+        if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
+            continue;
+        }
+        if (!strstr(dd.DeviceString, "Parsec") && !strstr(dd.DeviceID, "Parsec") &&
+            !strstr(dd.DeviceID, "VDA") && !strstr(dd.DeviceID, "PSCCDD")) {
+            continue;
+        }
 
-            LONG res = ChangeDisplaySettingsExA(dd.DeviceName, &dm, nullptr, CDS_UPDATEREGISTRY, nullptr);
-            if (res == DISP_CHANGE_SUCCESSFUL) {
-                ChangeDisplaySettingsExA(dd.DeviceName, nullptr, nullptr, 0, nullptr);
-                return true;
-            }
+        DEVMODEA dm{};
+        dm.dmSize = sizeof(dm);
+        if (!EnumDisplaySettingsA(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
+            continue;
+        }
+
+        if (dm.dmPelsWidth == static_cast<DWORD>(width) &&
+            dm.dmPelsHeight == static_cast<DWORD>(height) &&
+            dm.dmDisplayFrequency == static_cast<DWORD>(refreshHz)) {
+            return true;
+        }
+
+        dm.dmPelsWidth = static_cast<DWORD>(width);
+        dm.dmPelsHeight = static_cast<DWORD>(height);
+        dm.dmDisplayFrequency = static_cast<DWORD>(refreshHz);
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+
+        LONG res = ChangeDisplaySettingsExA(dd.DeviceName, &dm, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+        if (res == DISP_CHANGE_SUCCESSFUL) {
+            ChangeDisplaySettingsExA(nullptr, nullptr, nullptr, 0, nullptr);
+            return true;
         }
     }
     return false;
+}
+
+static void append_json_escaped(std::string& out, const std::string& str) {
+    for (unsigned char c : str) {
+        switch (c) {
+            case '\"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+                break;
+        }
+    }
 }
 
 // ---------------------------------------------------------
@@ -185,7 +209,7 @@ namespace fastmonitor {
         }
 
         g_vddHandle = open_vdd_handle();
-        g_monitors.reserve(8); // Parsec VDD supports up to 8 displays
+        g_monitors.reserve(VDD_MAX_DISPLAYS);
 
         g_stopEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
         if (g_vddHandle != INVALID_HANDLE_VALUE && g_stopEvent != nullptr) {
@@ -208,14 +232,28 @@ namespace fastmonitor {
                 return;
             }
 
+            device = g_vddHandle;
+
+            // Remove all active displays from driver before closing handle
+            if (device != INVALID_HANDLE_VALUE) {
+                for (const auto& vm : g_monitors) {
+                    UINT16 beIdx = static_cast<UINT16>(
+                        ((vm.driverIndex & 0xFF) << 8) | ((vm.driverIndex >> 8) & 0xFF)
+                    );
+                    vdd_ioctl(device, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
+                }
+                vdd_ioctl(device, VDD_IOCTL_UPDATE);
+            }
+
             g_keepRunning.store(false, std::memory_order_release);
             stopEv = g_stopEvent;
             thread = g_keepaliveThread;
-            device = g_vddHandle;
 
             g_stopEvent = nullptr;
             g_keepaliveThread = nullptr;
             g_vddHandle = INVALID_HANDLE_VALUE;
+            g_monitors.clear();
+            g_nextLogicalId = 1;
             g_initialized.store(false, std::memory_order_release);
         }
 
@@ -223,12 +261,8 @@ namespace fastmonitor {
             SetEvent(stopEv);
         }
 
-        if (device != INVALID_HANDLE_VALUE) {
-            CancelIoEx(device, nullptr);
-        }
-
         if (thread) {
-            WaitForSingleObject(thread, 1000);
+            WaitForSingleObject(thread, INFINITE);
             CloseHandle(thread);
         }
 
@@ -239,40 +273,58 @@ namespace fastmonitor {
         if (device != INVALID_HANDLE_VALUE) {
             CloseHandle(device);
         }
-
-        std::lock_guard<std::mutex> lock(g_mutex);
-        g_monitors.clear();
-        g_nextLogicalId = 1;
     }
 
     int createVirtualMonitor(int width,
                              int height,
                              int refreshHz,
                              const std::string& name) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_initialized.load(std::memory_order_acquire)) {
-            return -1;
-        }
-
+        int logicalId = -1;
         int driverIndex = -1;
 
-        if (g_vddHandle != INVALID_HANDLE_VALUE) {
-            // Official Parsec VDD protocol: ADD takes NO payload, returns driver slot index
-            DWORD idx = vdd_ioctl(g_vddHandle, VDD_IOCTL_ADD);
-            if (idx == static_cast<DWORD>(-1)) {
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (!g_initialized.load(std::memory_order_acquire)) {
                 return -1;
             }
-            driverIndex = static_cast<int>(idx);
-            vdd_ioctl(g_vddHandle, VDD_IOCTL_UPDATE); // Immediate ping to prevent timeout
-        } else {
-            // Emulation mode for testing when driver is absent
-            driverIndex = static_cast<int>(g_monitors.size());
+
+            if (g_monitors.size() >= VDD_MAX_DISPLAYS) {
+                return -1;
+            }
+
+            if (g_vddHandle != INVALID_HANDLE_VALUE) {
+                DWORD dIdx = 0;
+                DWORD bytesReturned = 0;
+                if (!vdd_ioctl(g_vddHandle, VDD_IOCTL_ADD, nullptr, 0, &dIdx, sizeof(dIdx), &bytesReturned) ||
+                    bytesReturned < sizeof(dIdx) || dIdx >= VDD_MAX_DISPLAYS) {
+                    return -1;
+                }
+                driverIndex = static_cast<int>(dIdx);
+                vdd_ioctl(g_vddHandle, VDD_IOCTL_UPDATE);
+            } else {
+                // Emulation mode: allocate lowest unused index [0..7]
+                bool used[VDD_MAX_DISPLAYS] = {false};
+                for (const auto& m : g_monitors) {
+                    if (m.driverIndex >= 0 && static_cast<size_t>(m.driverIndex) < VDD_MAX_DISPLAYS) {
+                        used[m.driverIndex] = true;
+                    }
+                }
+                for (size_t i = 0; i < VDD_MAX_DISPLAYS; ++i) {
+                    if (!used[i]) {
+                        driverIndex = static_cast<int>(i);
+                        break;
+                    }
+                }
+                if (driverIndex < 0) {
+                    return -1;
+                }
+            }
+
+            logicalId = g_nextLogicalId++;
+            g_monitors.emplace_back(logicalId, driverIndex, width, height, refreshHz, name);
         }
 
-        int logicalId = g_nextLogicalId++;
-        g_monitors.emplace_back(logicalId, driverIndex, width, height, refreshHz, name);
-
-        // Apply Win32 display mode settings
+        // Apply display mode outside global lock to eliminate contention
         apply_display_mode(driverIndex, width, height, refreshHz);
 
         return logicalId;
@@ -297,7 +349,6 @@ namespace fastmonitor {
         }
 
         if (g_vddHandle != INVALID_HANDLE_VALUE) {
-            // Official protocol: 16-bit big-endian driver index
             UINT16 beIdx = static_cast<UINT16>(
                 ((it->driverIndex & 0xFF) << 8) | ((it->driverIndex >> 8) & 0xFF)
             );
@@ -313,17 +364,27 @@ namespace fastmonitor {
                                  int width,
                                  int height,
                                  int refreshHz) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        for (auto& vm : g_monitors) {
-            if (vm.logicalId == logicalId) {
-                vm.width = width;
-                vm.height = height;
-                vm.refreshHz = refreshHz;
-                apply_display_mode(vm.driverIndex, width, height, refreshHz);
-                return true;
+        int driverIndex = -1;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            for (auto& vm : g_monitors) {
+                if (vm.logicalId == logicalId) {
+                    vm.width = width;
+                    vm.height = height;
+                    vm.refreshHz = refreshHz;
+                    driverIndex = vm.driverIndex;
+                    break;
+                }
             }
         }
-        return false;
+
+        if (driverIndex < 0) {
+            return false;
+        }
+
+        // Apply display mode outside global lock
+        apply_display_mode(driverIndex, width, height, refreshHz);
+        return true;
     }
 
     bool activateVirtualMonitor(int logicalId) {
@@ -371,15 +432,7 @@ namespace fastmonitor {
             json += ",\"refreshHz\":";
             json += std::to_string(vm.refreshHz);
             json += ",\"name\":\"";
-
-            // JSON escape name
-            for (char c : vm.name) {
-                if (c == '"' || c == '\\') {
-                    json += '\\';
-                }
-                json += c;
-            }
-
+            append_json_escaped(json, vm.name);
             json += "\",\"active\":";
             json += vm.active ? "true" : "false";
             json += "}";
@@ -393,8 +446,11 @@ namespace fastmonitor {
         if (g_vddHandle == INVALID_HANDLE_VALUE) {
             return 0;
         }
-        DWORD ver = vdd_ioctl(g_vddHandle, VDD_IOCTL_VERSION);
-        return (ver != static_cast<DWORD>(-1)) ? static_cast<int>(ver) : 0;
+        DWORD ver = 0;
+        if (!vdd_ioctl(g_vddHandle, VDD_IOCTL_VERSION, nullptr, 0, &ver, sizeof(ver), nullptr)) {
+            return 0;
+        }
+        return static_cast<int>(ver);
     }
 
     bool isDriverPresent() {

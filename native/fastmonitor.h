@@ -1,9 +1,11 @@
 #pragma once
 
 #include <jni.h>
+#include <windows.h>
 #include <string>
 #include <vector>
-#include <windows.h>
+#include <atomic>
+#include <mutex>
 
 // Official Parsec VDD Constants & Protocol
 // Class GUID:   {4d36e968-e325-11ce-bfc1-08002be10318}
@@ -21,9 +23,11 @@ enum : DWORD {
     VDD_IOCTL_VERSION = 0x0022e010
 };
 
+static constexpr size_t VDD_MAX_DISPLAYS = 8;
+
 struct FastVirtualMonitor {
     int logicalId;
-    int driverIndex;   // Driver slot returned by VDD_IOCTL_ADD
+    int driverIndex;
     int width;
     int height;
     int refreshHz;
