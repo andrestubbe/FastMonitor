@@ -265,13 +265,10 @@ To create **genuine Windows OS display outputs** visible in Windows 10/11 Displa
 Invoke-WebRequest -Uri "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.5.2/Signed-Driver-v24.12.24-x64.zip" -OutFile "$env:TEMP\vdd.zip"
 Expand-Archive -Path "$env:TEMP\vdd.zip" -DestinationPath "$env:TEMP\vdd" -Force
 
-# 2. Install driver certificate to Trusted Root Store
-certutil -addstore -f "Root" "$env:TEMP\vdd\ParsecVDA.cer"
+# 2. Install and register IDD device via Device Console (pnputil)
+pnputil /add-driver "$env:TEMP\vdd\MttVDD.inf" /install
 
-# 3. Install and register IDD device via Device Console (pnputil)
-pnputil /add-driver "$env:TEMP\vdd\ParsecVDA.inf" /install
-
-# 4. Clean up temporary files
+# 3. Clean up temporary files
 Remove-Item -Path "$env:TEMP\vdd.zip", "$env:TEMP\vdd" -Recurse -Force
 ```
 
@@ -286,13 +283,10 @@ Get-PnpDevice -FriendlyName "*Virtual Display*"
 
 ```powershell
 # 1. Find the published INF name (e.g. oemXX.inf)
-$oem = (pnputil /enum-drivers | Select-String -Pattern "ParsecVDA.inf" -Context 1,0 | ForEach-Object { $_.Context.PreContext[0] -replace "Published Name:\s+", "" }).Trim()
+$oem = (pnputil /enum-drivers | Select-String -Pattern "MttVDD.inf" -Context 1,0 | ForEach-Object { $_.Context.PreContext[0] -replace "Published Name:\s+", "" }).Trim()
 
 # 2. Delete driver package from Windows Driver Store
 if ($oem) { pnputil /delete-driver $oem /uninstall /force }
-
-# 3. Remove certificate from Trusted Root Store
-Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -like "*Parsec*" -or $_.Subject -like "*Virtual Display*" } | Remove-Item
 ```
 
 * **No driver installed?** FastMonitor automatically falls back to deterministic software emulation without crashing (`FastMonitor.isDriverPresent()` returns `false`).
