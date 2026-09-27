@@ -206,9 +206,9 @@ FastMonitor communicates with Windows Indirect Display Drivers conforming to the
 
 ## Installation
 
-FastMonitor is distributed via JitPack and requires **FastCore** for native library loading.
+FastMonitor is distributed via JitPack. It requires **FastCore** as the unified native library loader.
 
-### Maven (`pom.xml`)
+### Option 1: Maven (`pom.xml`)
 
 ```xml
 <repositories>
@@ -235,6 +235,37 @@ FastMonitor is distributed via JitPack and requires **FastCore** for native libr
 </dependencies>
 ```
 
+### Option 2: Gradle (`build.gradle`)
+
+```groovy
+repositories {
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    implementation 'com.github.andrestubbe:FastMonitor:0.1.0'
+    implementation 'com.github.andrestubbe:FastCore:0.1.0'
+}
+```
+
+### Option 3: Direct Download (No Build Tool)
+
+Download the latest pre-compiled JARs directly to add them to your project's classpath:
+
+1. 📦 [**FastMonitor-0.1.0.jar**](https://github.com/andrestubbe/FastMonitor/releases/tag/0.1.0) (The Core Library)
+2. ⚙️ [**FastCore-0.1.0.jar**](https://github.com/andrestubbe/FastCore/releases/tag/0.1.0) (The Mandatory JNI Loader)
+
+> [!IMPORTANT]
+> Both JARs must be present in your classpath for FastMonitor's native functions to operate correctly.
+
+### Driver Setup (Virtual Display Driver / Parsec VDD)
+
+To allow Windows to register authentic virtual display outputs, ensure a compatible Indirect Display Driver (IDD) is installed:
+1. Download the [Parsec VDD](https://github.com/nomi-san/parsec-vdd) or [Virtual-Display-Driver](https://github.com/itsmikethetech/Virtual-Display-Driver) package.
+2. Install the driver certificate into the Windows **Trusted Root Certification Authorities** store.
+3. Add the device via Windows Device Manager (*Action* → *Add Legacy Hardware* → *Display Adapters* → *Have Disk*).
+4. FastMonitor will instantly detect the driver interface GUID and begin managing virtual displays.
+
 ---
 
 ## Technical Examples & Hero Demos
@@ -258,11 +289,13 @@ See the `examples/` directory for ready-to-run implementations:
 
 ## Platform Support
 
-| Platform      | Status             |
-|---------------|--------------------|
-| Windows 10/11 | ✅ Fully Supported  |
-| Linux         | 🚧 Planned         |
-| macOS         | 🚧 Planned         |
+| Platform | Architecture | Status | Minimum Requirement |
+|:---|:---:|:---:|:---|
+| **Windows 11** | x64 | ✅ Fully Supported | Windows 11 Build 22000+ / IddCx 1.4+ |
+| **Windows 10** | x64 | ✅ Fully Supported | Windows 10 Version 1809+ / WDDM 2.0+ |
+| **Windows Server** | x64 | ✅ Fully Supported | Windows Server 2019/2022 (Desktop Experience) |
+| **Linux** | x64 / ARM64 | ❌ N/A | Windows IDD Driver Specific |
+| **macOS** | Apple Silicon / Intel | ❌ N/A | Windows IDD Driver Specific |
 
 ---
 
@@ -274,10 +307,26 @@ MIT License — See [LICENSE](LICENSE) file for details.
 
 ## Related Projects
 
+- [FastCore](https://github.com/andrestubbe/FastCore) — Native Library Loader & System Abstraction for Java
 - [FastScreen](https://github.com/andrestubbe/FastScreen) — Ultra-Fast 2000 FPS Screen Capture for Java
-- [FastCore](https://github.com/andrestubbe/FastCore) — Native Library Loader for Java
-- [FastRobot](https://github.com/andrestubbe/FastRobot) — High-Speed Native Automation for Java
+- [FastImage](https://github.com/andrestubbe/FastImage) — Ultra-Fast Native SIMD Image Processing for Java
+- [FastWindow](https://github.com/andrestubbe/FastWindow) — Ultra-Fast Win32 Native Window Engine for Java
 - [FastGPU](https://github.com/andrestubbe/FastGPU) — DirectX 12 Hardware Acceleration for Java
+- [FastVulkan](https://github.com/andrestubbe/FastVulkan) — Low-Overhead Vulkan Compute and Graphics for Java
+- [FastOverlay](https://github.com/andrestubbe/FastOverlay) — Transparent Zero-Latency Desktop Overlays for Java
+- [FastDWM](https://github.com/andrestubbe/FastDWM) — Desktop Window Manager Integration & VSync Pacing
+- [FastRobot](https://github.com/andrestubbe/FastRobot) — High-Speed Native Automation & Input Injection for Java
+- [FastPointer](https://github.com/andrestubbe/FastPointer) — Zero-Overhead Native 64-Bit Memory Pointers for Java
+- [FastMemory](https://github.com/andrestubbe/FastMemory) — High-Performance Off-Heap Memory Primitives for Java
+- [FastSIMD](https://github.com/andrestubbe/FastSIMD) — AVX2/AVX-512 Vectorized Math for Java
+- [FastSharedMemory](https://github.com/andrestubbe/FastSharedMemory) — Inter-Process Zero-Copy Memory Sharing for Java
+- [FastAI](https://github.com/andrestubbe/FastAI) — High-Performance AI Pipeline Substrate for Java
+- [FastAIModel](https://github.com/andrestubbe/FastAIModel) — Low-Latency Onnx & LLM Inference Runtime for Java
+- [FastAIMatcher](https://github.com/andrestubbe/FastAIMatcher) — Real-Time Visual Template & Feature Matching for Java
+- [FastTouch](https://github.com/andrestubbe/FastTouch) — Native Multi-Touch Injection for Windows
+- [FastOCR](https://github.com/andrestubbe/FastOCR) — Ultra-Fast Native Optical Character Recognition for Java
+- [FastSTT](https://github.com/andrestubbe/FastSTT) — High-Speed Speech-to-Text Transcription for Java
+- [FastContentParse](https://github.com/andrestubbe/FastContentParse) — Ultra-Fast Multi-Format Document Parsing for Java
 
 ---
 
