@@ -1,10 +1,18 @@
 #include "fastmonitor.h"
 
+#include <windows.h>
 #include <setupapi.h>
 #include <initguid.h>
 #include <algorithm>
-#include <sstream>
+#include <atomic>
+#include <cstddef>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "user32.lib")
@@ -353,8 +361,30 @@ namespace fastmonitor {
             g_monitors.emplace_back(logicalId, driverIndex, width, height, refreshHz, name);
         }
 
-        // Apply display mode outside global lock to eliminate contention
-        apply_display_mode(driverIndex, width, height, refreshHz);
+        // Apply display mode to OS display device if hardware driver is active
+        if (g_vddHandle != INVALID_HANDLE_VALUE) {
+            if (!apply_display_mode(driverIndex, width, height, refreshHz)) {
+                // Rollback driver slot allocation on failure
+                UINT16 beIdx = static_cast<UINT16>(
+                    ((driverIndex & 0xFF) << 8) | ((driverIndex >> 8) & 0xFF)
+                );
+                vdd_ioctl(g_vddHandle, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
+                vdd_ioctl(g_vddHandle, VDD_IOCTL_UPDATE);
+
+                std::lock_guard<std::mutex> lock(g_mutex);
+                auto it = std::find_if(
+                    g_monitors.begin(),
+                    g_monitors.end(),
+                    [logicalId](const FastVirtualMonitor& vm) {
+                        return vm.logicalId == logicalId;
+                    }
+                );
+                if (it != g_monitors.end()) {
+                    g_monitors.erase(it);
+                }
+                return -1;
+            }
+        }
 
         return logicalId;
     }
@@ -380,7 +410,6 @@ namespace fastmonitor {
             }
 
             driverIndex = it->driverIndex;
-            g_monitors.erase(it);
         }
 
         if (driverIndex >= 0) {
@@ -393,8 +422,25 @@ namespace fastmonitor {
                 UINT16 beIdx = static_cast<UINT16>(
                     ((driverIndex & 0xFF) << 8) | ((driverIndex >> 8) & 0xFF)
                 );
-                vdd_ioctl(device, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
+                bool removed = vdd_ioctl(device, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
+                if (!removed) {
+                    return false;
+                }
                 vdd_ioctl(device, VDD_IOCTL_UPDATE);
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            auto it = std::find_if(
+                g_monitors.begin(),
+                g_monitors.end(),
+                [logicalId](const FastVirtualMonitor& vm) {
+                    return vm.logicalId == logicalId;
+                }
+            );
+            if (it != g_monitors.end()) {
+                g_monitors.erase(it);
             }
         }
 

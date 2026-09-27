@@ -27,7 +27,7 @@ public class Demo {
             System.out.println("[SUCCESS] Virtual monitor created with ID: " + monitor.id());
 
             boolean activated = monitor.activate();
-            System.out.println("[INFO] Monitor active in Windows topology: " + activated);
+            System.out.println("[INFO] Monitor active in internal state model: " + activated);
 
             System.out.println("[INFO] Current monitors dump:");
             System.out.println(FastMonitor.dumpAllMonitorsJson());

@@ -58,9 +58,14 @@ public final class FastMonitor implements AutoCloseable {
     private volatile Config config;
     private final AtomicInteger state = new AtomicInteger(STATE_OPEN);
 
-    private FastMonitor(int id, Config config) {
+    private static final java.util.concurrent.atomic.AtomicLong BACKEND_GENERATION = new java.util.concurrent.atomic.AtomicLong(1);
+
+    private final long generation;
+
+    private FastMonitor(int id, Config config, long generation) {
         this.id = id;
         this.config = config;
+        this.generation = generation;
     }
 
     /**
@@ -92,6 +97,7 @@ public final class FastMonitor implements AutoCloseable {
             return;
         }
         FastMonitorNative.shutdownBackend();
+        BACKEND_GENERATION.incrementAndGet();
         INITIALIZED.set(false);
     }
 
@@ -132,7 +138,7 @@ public final class FastMonitor implements AutoCloseable {
         if (id <= 0) {
             throw new IllegalStateException("Failed to create virtual monitor: " + config);
         }
-        return new FastMonitor(id, config);
+        return new FastMonitor(id, config, BACKEND_GENERATION.get());
     }
 
     /**
@@ -167,6 +173,7 @@ public final class FastMonitor implements AutoCloseable {
      */
     public boolean reconfigure(int width, int height, int refreshHz) {
         checkNotClosed();
+        checkBackendActive();
         validateMode(width, height, refreshHz);
         Config cur = this.config;
         if (cur.width == width && cur.height == height && cur.refreshHz == refreshHz) {
@@ -184,6 +191,7 @@ public final class FastMonitor implements AutoCloseable {
      */
     public boolean reconfigure(Config newConfig) {
         checkNotClosed();
+        checkBackendActive();
         Objects.requireNonNull(newConfig, "newConfig");
         Config cur = this.config;
         if (cur.width == newConfig.width && cur.height == newConfig.height && cur.refreshHz == newConfig.refreshHz && cur.name.equals(newConfig.name)) {
@@ -206,6 +214,7 @@ public final class FastMonitor implements AutoCloseable {
      */
     public boolean activate() {
         checkNotClosed();
+        checkBackendActive();
         return FastMonitorNative.activateVirtualMonitor(id);
     }
 
@@ -214,6 +223,7 @@ public final class FastMonitor implements AutoCloseable {
      */
     public boolean deactivate() {
         checkNotClosed();
+        checkBackendActive();
         return FastMonitorNative.deactivateVirtualMonitor(id);
     }
 
@@ -243,12 +253,21 @@ public final class FastMonitor implements AutoCloseable {
      * Returns a JSON representation of all currently active virtual monitors.
      */
     public static String dumpAllMonitorsJson() {
+        if (!INITIALIZED.get()) {
+            return "[]";
+        }
         return FastMonitorNative.listVirtualMonitors();
     }
 
     private void checkNotClosed() {
         if (state.get() != STATE_OPEN) {
             throw new IllegalStateException("Virtual monitor #" + id + " is not open.");
+        }
+    }
+
+    private void checkBackendActive() {
+        if (!INITIALIZED.get() || generation != BACKEND_GENERATION.get()) {
+            throw new IllegalStateException("FastMonitor backend has been shut down or restarted.");
         }
     }
 }
