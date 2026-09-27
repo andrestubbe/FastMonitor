@@ -10,6 +10,7 @@
 #pragma comment(lib, "user32.lib")
 
 static std::mutex g_mutex;
+static std::mutex g_ioctlMutex;
 static std::vector<FastVirtualMonitor> g_monitors;
 static std::atomic<bool> g_initialized{false};
 static HANDLE g_vddHandle = INVALID_HANDLE_VALUE;
@@ -24,6 +25,7 @@ static std::atomic<bool> g_keepRunning{false};
 // ---------------------------------------------------------
 
 static bool vdd_ioctl(HANDLE h, DWORD code, const void* inData = nullptr, DWORD inSize = 0, void* outData = nullptr, DWORD outSize = 0, DWORD* bytesOut = nullptr) {
+    std::lock_guard<std::mutex> lock(g_ioctlMutex);
     if (h == INVALID_HANDLE_VALUE) {
         return false;
     }
@@ -138,6 +140,9 @@ static bool apply_display_mode(int /*driverIndex*/, int width, int height, int r
     DISPLAY_DEVICEA dd{};
     dd.cb = sizeof(dd);
 
+    DISPLAY_DEVICEA candidate{};
+    bool found = false;
+
     for (DWORD i = 0; EnumDisplayDevicesA(nullptr, i, &dd, 0); ++i) {
         if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
             continue;
@@ -153,22 +158,44 @@ static bool apply_display_mode(int /*driverIndex*/, int width, int height, int r
             continue;
         }
 
-        if (dm.dmPelsWidth == static_cast<DWORD>(width) &&
-            dm.dmPelsHeight == static_cast<DWORD>(height) &&
-            dm.dmDisplayFrequency == static_cast<DWORD>(refreshHz)) {
-            return true;
+        // Prefer candidate whose current mode does not match the target mode
+        if (dm.dmPelsWidth != static_cast<DWORD>(width) ||
+            dm.dmPelsHeight != static_cast<DWORD>(height) ||
+            dm.dmDisplayFrequency != static_cast<DWORD>(refreshHz)) {
+            candidate = dd;
+            found = true;
+            break;
         }
 
-        dm.dmPelsWidth = static_cast<DWORD>(width);
-        dm.dmPelsHeight = static_cast<DWORD>(height);
-        dm.dmDisplayFrequency = static_cast<DWORD>(refreshHz);
-        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+        candidate = dd;
+        found = true;
+    }
 
-        LONG res = ChangeDisplaySettingsExA(dd.DeviceName, &dm, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
-        if (res == DISP_CHANGE_SUCCESSFUL) {
-            ChangeDisplaySettingsExA(nullptr, nullptr, nullptr, 0, nullptr);
-            return true;
-        }
+    if (!found) {
+        return false;
+    }
+
+    DEVMODEA dm{};
+    dm.dmSize = sizeof(dm);
+    if (!EnumDisplaySettingsA(candidate.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
+        return false;
+    }
+
+    if (dm.dmPelsWidth == static_cast<DWORD>(width) &&
+        dm.dmPelsHeight == static_cast<DWORD>(height) &&
+        dm.dmDisplayFrequency == static_cast<DWORD>(refreshHz)) {
+        return true;
+    }
+
+    dm.dmPelsWidth = static_cast<DWORD>(width);
+    dm.dmPelsHeight = static_cast<DWORD>(height);
+    dm.dmDisplayFrequency = static_cast<DWORD>(refreshHz);
+    dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+
+    LONG res = ChangeDisplaySettingsExA(candidate.DeviceName, &dm, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+    if (res == DISP_CHANGE_SUCCESSFUL) {
+        ChangeDisplaySettingsExA(nullptr, nullptr, nullptr, 0, nullptr);
+        return true;
     }
     return false;
 }
@@ -225,6 +252,7 @@ namespace fastmonitor {
         HANDLE thread = nullptr;
         HANDLE device = INVALID_HANDLE_VALUE;
         HANDLE stopEv = nullptr;
+        std::vector<int> driverIndices;
 
         {
             std::lock_guard<std::mutex> lock(g_mutex);
@@ -232,22 +260,16 @@ namespace fastmonitor {
                 return;
             }
 
-            device = g_vddHandle;
-
-            // Remove all active displays from driver before closing handle
-            if (device != INVALID_HANDLE_VALUE) {
-                for (const auto& vm : g_monitors) {
-                    UINT16 beIdx = static_cast<UINT16>(
-                        ((vm.driverIndex & 0xFF) << 8) | ((vm.driverIndex >> 8) & 0xFF)
-                    );
-                    vdd_ioctl(device, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
-                }
-                vdd_ioctl(device, VDD_IOCTL_UPDATE);
-            }
-
             g_keepRunning.store(false, std::memory_order_release);
             stopEv = g_stopEvent;
             thread = g_keepaliveThread;
+            device = g_vddHandle;
+
+            for (const auto& vm : g_monitors) {
+                if (vm.driverIndex >= 0) {
+                    driverIndices.push_back(vm.driverIndex);
+                }
+            }
 
             g_stopEvent = nullptr;
             g_keepaliveThread = nullptr;
@@ -271,6 +293,13 @@ namespace fastmonitor {
         }
 
         if (device != INVALID_HANDLE_VALUE) {
+            for (int dIdx : driverIndices) {
+                UINT16 beIdx = static_cast<UINT16>(
+                    ((dIdx & 0xFF) << 8) | ((dIdx >> 8) & 0xFF)
+                );
+                vdd_ioctl(device, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
+            }
+            vdd_ioctl(device, VDD_IOCTL_UPDATE);
             CloseHandle(device);
         }
     }
@@ -331,32 +360,44 @@ namespace fastmonitor {
     }
 
     bool destroyVirtualMonitor(int logicalId) {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_initialized.load(std::memory_order_acquire)) {
-            return false;
-        }
-
-        auto it = std::find_if(
-            g_monitors.begin(),
-            g_monitors.end(),
-            [logicalId](const FastVirtualMonitor& vm) {
-                return vm.logicalId == logicalId;
+        int driverIndex = -1;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (!g_initialized.load(std::memory_order_acquire)) {
+                return false;
             }
-        );
 
-        if (it == g_monitors.end()) {
-            return false;
-        }
-
-        if (g_vddHandle != INVALID_HANDLE_VALUE) {
-            UINT16 beIdx = static_cast<UINT16>(
-                ((it->driverIndex & 0xFF) << 8) | ((it->driverIndex >> 8) & 0xFF)
+            auto it = std::find_if(
+                g_monitors.begin(),
+                g_monitors.end(),
+                [logicalId](const FastVirtualMonitor& vm) {
+                    return vm.logicalId == logicalId;
+                }
             );
-            vdd_ioctl(g_vddHandle, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
-            vdd_ioctl(g_vddHandle, VDD_IOCTL_UPDATE);
+
+            if (it == g_monitors.end()) {
+                return false;
+            }
+
+            driverIndex = it->driverIndex;
+            g_monitors.erase(it);
         }
 
-        g_monitors.erase(it);
+        if (driverIndex >= 0) {
+            HANDLE device = INVALID_HANDLE_VALUE;
+            {
+                std::lock_guard<std::mutex> lock(g_mutex);
+                device = g_vddHandle;
+            }
+            if (device != INVALID_HANDLE_VALUE) {
+                UINT16 beIdx = static_cast<UINT16>(
+                    ((driverIndex & 0xFF) << 8) | ((driverIndex >> 8) & 0xFF)
+                );
+                vdd_ioctl(device, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
+                vdd_ioctl(device, VDD_IOCTL_UPDATE);
+            }
+        }
+
         return true;
     }
 
@@ -365,13 +406,12 @@ namespace fastmonitor {
                                  int height,
                                  int refreshHz) {
         int driverIndex = -1;
+        bool hasHardwareDriver = false;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
-            for (auto& vm : g_monitors) {
+            hasHardwareDriver = (g_vddHandle != INVALID_HANDLE_VALUE);
+            for (const auto& vm : g_monitors) {
                 if (vm.logicalId == logicalId) {
-                    vm.width = width;
-                    vm.height = height;
-                    vm.refreshHz = refreshHz;
                     driverIndex = vm.driverIndex;
                     break;
                 }
@@ -382,8 +422,24 @@ namespace fastmonitor {
             return false;
         }
 
-        // Apply display mode outside global lock
-        apply_display_mode(driverIndex, width, height, refreshHz);
+        // Apply display mode to OS display device if hardware driver is active
+        if (hasHardwareDriver && !apply_display_mode(driverIndex, width, height, refreshHz)) {
+            return false;
+        }
+
+        // Commit updated state
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            for (auto& vm : g_monitors) {
+                if (vm.logicalId == logicalId) {
+                    vm.width = width;
+                    vm.height = height;
+                    vm.refreshHz = refreshHz;
+                    break;
+                }
+            }
+        }
+
         return true;
     }
 

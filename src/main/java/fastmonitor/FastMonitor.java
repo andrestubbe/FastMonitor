@@ -149,12 +149,25 @@ public final class FastMonitor implements AutoCloseable {
         return config;
     }
 
+    public static void validateMode(int width, int height, int refreshHz) {
+        if (width < 640 || width > 7680) {
+            throw new IllegalArgumentException("Width out of supported bounds [640..7680]: " + width);
+        }
+        if (height < 480 || height > 4320) {
+            throw new IllegalArgumentException("Height out of supported bounds [480..4320]: " + height);
+        }
+        if (refreshHz < 24 || refreshHz > 500) {
+            throw new IllegalArgumentException("Refresh rate out of supported bounds [24..500]: " + refreshHz);
+        }
+    }
+
     /**
      * Reconfigures resolution and refresh rate using primitive values.
      * Skips allocation if dimensions and refresh rate are identical.
      */
     public boolean reconfigure(int width, int height, int refreshHz) {
         checkNotClosed();
+        validateMode(width, height, refreshHz);
         Config cur = this.config;
         if (cur.width == width && cur.height == height && cur.refreshHz == refreshHz) {
             return true;
@@ -189,7 +202,7 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     /**
-     * Activates this virtual monitor in the OS topology.
+     * Updates the monitor active flag in the internal state model.
      */
     public boolean activate() {
         checkNotClosed();
@@ -197,7 +210,7 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     /**
-     * Deactivates this virtual monitor from the OS topology without destroying it.
+     * Updates the monitor inactive flag in the internal state model.
      */
     public boolean deactivate() {
         checkNotClosed();
@@ -211,13 +224,14 @@ public final class FastMonitor implements AutoCloseable {
         if (!state.compareAndSet(STATE_OPEN, STATE_DESTROYING)) {
             return false;
         }
-        boolean ok = FastMonitorNative.destroyVirtualMonitor(id);
-        if (ok) {
-            state.set(STATE_CLOSED);
-        } else {
-            state.set(STATE_OPEN); // Allow retry if native call failed
+        try {
+            boolean ok = FastMonitorNative.destroyVirtualMonitor(id);
+            state.set(ok ? STATE_CLOSED : STATE_OPEN);
+            return ok;
+        } catch (Throwable t) {
+            state.set(STATE_OPEN);
+            throw t;
         }
-        return ok;
     }
 
     @Override
