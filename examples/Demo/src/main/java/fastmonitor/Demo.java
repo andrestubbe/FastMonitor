@@ -33,6 +33,10 @@ public class Demo {
             System.out.println(FastMonitor.dumpAllMonitorsJson());
 
             System.out.println();
+            System.out.println(">> Monitor is currently ACTIVE. Open Windows Display Settings to inspect!");
+            System.out.println(">> Press ENTER to test dynamic resolution/refresh rate change...");
+            System.in.read();
+
             System.out.println("[INFO] Reconfiguring monitor to 2560x1440 @ 144Hz...");
             Config gamingConfig = new Config(2560, 1440, 144, "FastMonitor-Virtual-1-Gaming");
             boolean reconfigured = monitor.reconfigure(gamingConfig);
@@ -41,6 +45,10 @@ public class Demo {
 
             System.out.println("[INFO] Updated monitors dump:");
             System.out.println(FastMonitor.dumpAllMonitorsJson());
+
+            System.out.println();
+            System.out.println(">> Reconfigured to 2560x1440 @ 144Hz. Press ENTER to deactivate and close...");
+            System.in.read();
 
             System.out.println();
             System.out.println("[INFO] Deactivating monitor...");
