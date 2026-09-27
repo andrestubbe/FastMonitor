@@ -63,7 +63,7 @@ public class Demo {
 - [API Quick Reference](#api-quick-reference)
 - [Driver Architecture & Integration](#driver-architecture--integration)
 - [Installation](#installation)
-- [Technical Examples & Hero Demos](#technical-examples--hero-demos)
+- [Technical Demos & Benchmarks](#technical-demos--benchmarks)
 - [Documentation](#documentation)
 - [Platform Support](#platform-support)
 - [Related Projects](#related-projects)
@@ -284,14 +284,12 @@ Get-PnpDevice -FriendlyName "*Virtual Display*"
 
 ---
 
-## Technical Examples & Hero Demos
+## Technical Demos & Benchmarks
 
-See the `examples/` directory for ready-to-run interactive implementations, benchmarks, and tests:
-
-| Example / Demo | Description | Path | Run Command |
-|---|---|---|---|
-| **Visual Showcase Hero Demo** | Demonstrates creating, activating, reconfiguring resolution/refresh rate, and tearing down virtual displays with real-time JSON topology inspection. | [`examples/Demo/Demo.java`](examples/Demo/src/main/java/fastmonitor/Demo.java) | `run-demo.bat` |
-| **High-Precision JMH Benchmarks** | Standardized microbenchmarks measuring virtual display allocation throughput, mode reconfiguration latency, and zero-heap memory pressure. | [`examples/Benchmark`](examples/Benchmark) | `run-benchmark.bat` |
+| Case | Java Example | Launcher | Description |
+|:---|:---|:---|:---|
+| **Interactive Showcase Demo** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | `run-demo.bat` | Demonstrates creating, activating, reconfiguring resolution/refresh rate, and tearing down virtual displays with real-time JSON topology inspection. |
+| **JMH Microbenchmark Suite** | [Benchmark.java](examples/Benchmark) | `run-benchmark.bat` | Standardized microbenchmarks measuring virtual display allocation throughput, mode reconfiguration latency, and zero-heap memory pressure. |
 
 ---
 
