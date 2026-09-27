@@ -1,6 +1,7 @@
 package fastmonitor;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * High-performance virtual monitor and display topology controller for Java.
@@ -9,20 +10,13 @@ import java.util.Objects;
  * and destruction of native virtual displays in Windows 10/11 using
  * Indirect Display Driver (IDD) technology.</p>
  *
- * <p>Key features:
- * <ul>
- *   <li>Create hardware-accelerated virtual displays on-the-fly (60–500 Hz, up to 8K)</li>
- *   <li>Fully integrated with Windows Desktop Window Manager (DWM) and DXGI outputs</li>
- *   <li>Zero-copy synergy with FastScreen, FastGPU, FastOverlay, and FastRobot</li>
- *   <li>Native C++ JNI bridge via DeviceIoControl and Parsec VDD architecture</li>
- *   <li>Safe lifecycle management via {@link AutoCloseable}</li>
- * </ul></p>
- *
  * @author Andre Stubbe
  * @version 0.1.0
  * @since 2026-09-27
  */
 public final class FastMonitor implements AutoCloseable {
+
+    private static final AtomicBoolean INITIALIZED = new AtomicBoolean(false);
 
     /**
      * Configuration specification for a virtual monitor.
@@ -34,9 +28,15 @@ public final class FastMonitor implements AutoCloseable {
         public final String name;
 
         public Config(int width, int height, int refreshHz, String name) {
-            if (width <= 0) throw new IllegalArgumentException("Width must be > 0: " + width);
-            if (height <= 0) throw new IllegalArgumentException("Height must be > 0: " + height);
-            if (refreshHz <= 0) throw new IllegalArgumentException("Refresh rate must be > 0: " + refreshHz);
+            if (width < 640 || width > 7680) {
+                throw new IllegalArgumentException("Width out of supported bounds [640..7680]: " + width);
+            }
+            if (height < 480 || height > 4320) {
+                throw new IllegalArgumentException("Height out of supported bounds [480..4320]: " + height);
+            }
+            if (refreshHz < 24 || refreshHz > 500) {
+                throw new IllegalArgumentException("Refresh rate out of supported bounds [24..500]: " + refreshHz);
+            }
             this.width = width;
             this.height = height;
             this.refreshHz = refreshHz;
@@ -50,8 +50,8 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     private final int id;
-    private Config config;
-    private boolean closed = false;
+    private volatile Config config;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     private FastMonitor(int id, Config config) {
         this.id = id;
@@ -63,15 +63,47 @@ public final class FastMonitor implements AutoCloseable {
      *
      * @return true if initialized successfully
      */
-    public static synchronized boolean init() {
-        return FastMonitorNative.initBackend();
+    public static boolean init() {
+        if (INITIALIZED.get()) {
+            return true;
+        }
+        synchronized (FastMonitor.class) {
+            if (INITIALIZED.get()) {
+                return true;
+            }
+            boolean ok = FastMonitorNative.initBackend();
+            if (ok) {
+                INITIALIZED.set(true);
+            }
+            return ok;
+        }
     }
 
     /**
      * Shuts down the native FastMonitor backend.
      */
     public static synchronized void shutdown() {
+        if (!INITIALIZED.get()) {
+            return;
+        }
         FastMonitorNative.shutdownBackend();
+        INITIALIZED.set(false);
+    }
+
+    /**
+     * Checks if the physical Parsec VDD driver is present on this system.
+     */
+    public static boolean isDriverPresent() {
+        init();
+        return FastMonitorNative.isDriverPresent();
+    }
+
+    /**
+     * Returns the driver version, or 0 if running in emulation mode.
+     */
+    public static int driverVersion() {
+        init();
+        return FastMonitorNative.driverVersion();
     }
 
     /**
@@ -83,7 +115,9 @@ public final class FastMonitor implements AutoCloseable {
      */
     public static FastMonitor create(Config config) {
         Objects.requireNonNull(config, "config");
-        init();
+        if (!INITIALIZED.get()) {
+            init();
+        }
         int id = FastMonitorNative.createVirtualMonitor(
                 config.width,
                 config.height,
@@ -111,12 +145,21 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     /**
-     * Reconfigures resolution and refresh rate of this virtual monitor.
-     *
-     * @param newConfig new configuration parameters
-     * @return true if successfully reconfigured
+     * Reconfigures resolution and refresh rate using primitive values (zero-allocation hot-path).
      */
-    public synchronized boolean reconfigure(Config newConfig) {
+    public boolean reconfigure(int width, int height, int refreshHz) {
+        checkNotClosed();
+        boolean ok = FastMonitorNative.configureVirtualMonitor(id, width, height, refreshHz);
+        if (ok) {
+            this.config = new Config(width, height, refreshHz, this.config.name);
+        }
+        return ok;
+    }
+
+    /**
+     * Reconfigures resolution and refresh rate of this virtual monitor.
+     */
+    public boolean reconfigure(Config newConfig) {
         checkNotClosed();
         Objects.requireNonNull(newConfig, "newConfig");
         boolean ok = FastMonitorNative.configureVirtualMonitor(
@@ -134,7 +177,7 @@ public final class FastMonitor implements AutoCloseable {
     /**
      * Activates this virtual monitor in the OS topology.
      */
-    public synchronized boolean activate() {
+    public boolean activate() {
         checkNotClosed();
         return FastMonitorNative.activateVirtualMonitor(id);
     }
@@ -142,7 +185,7 @@ public final class FastMonitor implements AutoCloseable {
     /**
      * Deactivates this virtual monitor from the OS topology without destroying it.
      */
-    public synchronized boolean deactivate() {
+    public boolean deactivate() {
         checkNotClosed();
         return FastMonitorNative.deactivateVirtualMonitor(id);
     }
@@ -150,12 +193,15 @@ public final class FastMonitor implements AutoCloseable {
     /**
      * Destroys this virtual monitor and detaches it from Windows.
      */
-    public synchronized boolean destroy() {
-        if (closed) {
+    public boolean destroy() {
+        if (closed.get()) {
             return false;
         }
-        closed = true;
-        return FastMonitorNative.destroyVirtualMonitor(id);
+        boolean ok = FastMonitorNative.destroyVirtualMonitor(id);
+        if (ok) {
+            closed.set(true);
+        }
+        return ok;
     }
 
     @Override
@@ -171,7 +217,7 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     private void checkNotClosed() {
-        if (closed) {
+        if (closed.get()) {
             throw new IllegalStateException("Virtual monitor #" + id + " has already been destroyed.");
         }
     }

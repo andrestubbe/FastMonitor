@@ -50,4 +50,8 @@ public final class FastMonitorNative {
     public static native boolean activateVirtualMonitor(int logicalId);
 
     public static native boolean deactivateVirtualMonitor(int logicalId);
+
+    public static native boolean isDriverPresent();
+
+    public static native int driverVersion();
 }

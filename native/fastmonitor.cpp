@@ -3,27 +3,71 @@
 #include <setupapi.h>
 #include <initguid.h>
 #include <mutex>
+#include <atomic>
 #include <algorithm>
+#include <sstream>
 
 #pragma comment(lib, "setupapi.lib")
+#pragma comment(lib, "user32.lib")
 
 static std::mutex g_mutex;
 static std::vector<FastVirtualMonitor> g_monitors;
-static bool g_initialized = false;
+static std::atomic<bool> g_initialized{false};
 static HANDLE g_vddHandle = INVALID_HANDLE_VALUE;
 static int g_nextLogicalId = 1;
 
+static HANDLE g_stopEvent = nullptr;
 static HANDLE g_keepaliveThread = nullptr;
-static bool g_keepaliveRunning = false;
+static std::atomic<bool> g_keepRunning{false};
+
+// ---------------------------------------------------------
+// Fast Stack-Based IOCTL Dispatcher
+// ---------------------------------------------------------
+
+static DWORD vdd_ioctl(HANDLE h, DWORD code, const void* inData = nullptr, size_t inSize = 0) {
+    if (h == INVALID_HANDLE_VALUE) {
+        return static_cast<DWORD>(-1);
+    }
+
+    BYTE inBuf[32]{};
+    if (inData && inSize > 0) {
+        memcpy(inBuf, inData, (inSize < 32) ? inSize : 32);
+    }
+
+    OVERLAPPED ov{};
+    ov.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!ov.hEvent) {
+        return static_cast<DWORD>(-1);
+    }
+
+    DWORD outVal = 0;
+    DWORD bytesReturned = 0;
+    BOOL ok = DeviceIoControl(
+        h,
+        code,
+        inBuf,
+        sizeof(inBuf),
+        &outVal,
+        sizeof(outVal),
+        &bytesReturned,
+        &ov
+    );
+
+    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+        ok = GetOverlappedResult(h, &ov, &bytesReturned, TRUE);
+    }
+
+    CloseHandle(ov.hEvent);
+    return ok ? outVal : static_cast<DWORD>(-1);
+}
 
 // ---------------------------------------------------------
 // Device-Discovery: Parsec VDD via Adapter GUID
 // ---------------------------------------------------------
 
-static HANDLE open_vdd_handle()
-{
+static HANDLE open_vdd_handle() {
     HDEVINFO devInfo = SetupDiGetClassDevsA(
-        &VDD_CLASS_GUID,
+        &VDD_ADAPTER_GUID,
         nullptr,
         nullptr,
         DIGCF_PRESENT | DIGCF_DEVICEINTERFACE
@@ -35,52 +79,42 @@ static HANDLE open_vdd_handle()
     SP_DEVICE_INTERFACE_DATA ifData{};
     ifData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
 
-    DWORD index = 0;
     HANDLE result = INVALID_HANDLE_VALUE;
 
-    while (SetupDiEnumDeviceInterfaces(devInfo, nullptr,
-                                       &VDD_ADAPTER_GUID,
-                                       index, &ifData)) {
+    for (DWORD idx = 0; SetupDiEnumDeviceInterfaces(devInfo, nullptr, &VDD_ADAPTER_GUID, idx, &ifData); ++idx) {
         DWORD requiredSize = 0;
-        SetupDiGetDeviceInterfaceDetailA(devInfo, &ifData,
-                                         nullptr, 0,
-                                         &requiredSize, nullptr);
+        SetupDiGetDeviceInterfaceDetailA(devInfo, &ifData, nullptr, 0, &requiredSize, nullptr);
         if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
             break;
         }
 
-        auto detailData = (PSP_DEVICE_INTERFACE_DETAIL_DATA_A)malloc(requiredSize);
+        auto detailData = static_cast<PSP_DEVICE_INTERFACE_DETAIL_DATA_A>(malloc(requiredSize));
         if (!detailData) {
             break;
         }
 
         detailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
 
-        if (!SetupDiGetDeviceInterfaceDetailA(devInfo, &ifData,
-                                              detailData, requiredSize,
-                                              nullptr, nullptr)) {
+        if (SetupDiGetDeviceInterfaceDetailA(devInfo, &ifData, detailData, requiredSize, nullptr, nullptr)) {
+            HANDLE h = CreateFileA(
+                detailData->DevicePath,
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED | FILE_FLAG_WRITE_THROUGH,
+                nullptr
+            );
+
+            free(detailData);
+            if (h != INVALID_HANDLE_VALUE) {
+                result = h;
+                break;
+            }
+        } else {
             free(detailData);
             break;
         }
-
-        HANDLE h = CreateFileA(
-            detailData->DevicePath,
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
-            nullptr
-        );
-
-        free(detailData);
-
-        if (h != INVALID_HANDLE_VALUE) {
-            result = h;
-            break;
-        }
-
-        ++index;
     }
 
     SetupDiDestroyDeviceInfoList(devInfo);
@@ -88,49 +122,54 @@ static HANDLE open_vdd_handle()
 }
 
 // ---------------------------------------------------------
-// Keepalive Thread: VDD_IOCTL_UPDATE
+// Keepalive Watchdog Thread (100 ms interval)
 // ---------------------------------------------------------
 
-static DWORD WINAPI keepalive_thread_proc(LPVOID)
-{
-    while (g_keepaliveRunning) {
-        if (g_vddHandle == INVALID_HANDLE_VALUE) {
-            Sleep(200);
-            continue;
-        }
-
-        BYTE inBuf[0x20] = {};
-        OVERLAPPED ov{};
-        ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-        if (!ov.hEvent) {
+static DWORD WINAPI keepalive_thread_proc(LPVOID) {
+    while (g_keepRunning.load(std::memory_order_relaxed)) {
+        DWORD wait = WaitForSingleObject(g_stopEvent, 100);
+        if (wait == WAIT_OBJECT_0) {
             break;
         }
 
-        DWORD bytesReturned = 0;
-        BOOL ok = DeviceIoControl(
-            g_vddHandle,
-            VDD_IOCTL_UPDATE,
-            inBuf,
-            sizeof(inBuf),
-            nullptr,
-            0,
-            &bytesReturned,
-            &ov
-        );
-
-        if (!ok && GetLastError() == ERROR_IO_PENDING) {
-            ok = GetOverlappedResult(
-                g_vddHandle,
-                &ov,
-                &bytesReturned,
-                TRUE
-            );
+        HANDLE device = INVALID_HANDLE_VALUE;
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            device = g_vddHandle;
         }
 
-        CloseHandle(ov.hEvent);
-        Sleep(200);
+        if (device != INVALID_HANDLE_VALUE) {
+            vdd_ioctl(device, VDD_IOCTL_UPDATE);
+        }
     }
     return 0;
+}
+
+// ---------------------------------------------------------
+// Win32 Display Configuration Helper (ChangeDisplaySettingsEx)
+// ---------------------------------------------------------
+
+static bool apply_display_mode(int driverIndex, int width, int height, int refreshHz) {
+    DISPLAY_DEVICEA dd{};
+    dd.cb = sizeof(dd);
+
+    for (DWORD i = 0; EnumDisplayDevicesA(nullptr, i, &dd, 0); ++i) {
+        if (strstr(dd.DeviceString, "Parsec") || strstr(dd.DeviceID, "Parsec") || strstr(dd.DeviceID, "VDA")) {
+            DEVMODEA dm{};
+            dm.dmSize = sizeof(dm);
+            dm.dmPelsWidth = static_cast<DWORD>(width);
+            dm.dmPelsHeight = static_cast<DWORD>(height);
+            dm.dmDisplayFrequency = static_cast<DWORD>(refreshHz);
+            dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+
+            LONG res = ChangeDisplaySettingsExA(dd.DeviceName, &dm, nullptr, CDS_UPDATEREGISTRY, nullptr);
+            if (res == DISP_CHANGE_SUCCESSFUL) {
+                ChangeDisplaySettingsExA(dd.DeviceName, nullptr, nullptr, 0, nullptr);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // ---------------------------------------------------------
@@ -141,47 +180,69 @@ namespace fastmonitor {
 
     bool initBackend() {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (g_initialized) {
+        if (g_initialized.load(std::memory_order_acquire)) {
             return true;
         }
 
         g_vddHandle = open_vdd_handle();
-        // If physical driver is present, use it; otherwise allow software tracking
-        g_initialized = true;
+        g_monitors.reserve(8); // Parsec VDD supports up to 8 displays
 
-        if (g_vddHandle != INVALID_HANDLE_VALUE) {
-            g_keepaliveRunning = true;
-            g_keepaliveThread = CreateThread(
-                nullptr,
-                0,
-                keepalive_thread_proc,
-                nullptr,
-                0,
-                nullptr
-            );
+        g_stopEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+        if (g_vddHandle != INVALID_HANDLE_VALUE && g_stopEvent != nullptr) {
+            g_keepRunning.store(true, std::memory_order_release);
+            g_keepaliveThread = CreateThread(nullptr, 0, keepalive_thread_proc, nullptr, 0, nullptr);
         }
 
+        g_initialized.store(true, std::memory_order_release);
         return true;
     }
 
     void shutdownBackend() {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        HANDLE thread = nullptr;
+        HANDLE device = INVALID_HANDLE_VALUE;
+        HANDLE stopEv = nullptr;
 
-        g_keepaliveRunning = false;
-        if (g_keepaliveThread) {
-            WaitForSingleObject(g_keepaliveThread, 1000);
-            CloseHandle(g_keepaliveThread);
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            if (!g_initialized.load(std::memory_order_acquire)) {
+                return;
+            }
+
+            g_keepRunning.store(false, std::memory_order_release);
+            stopEv = g_stopEvent;
+            thread = g_keepaliveThread;
+            device = g_vddHandle;
+
+            g_stopEvent = nullptr;
             g_keepaliveThread = nullptr;
-        }
-
-        if (g_vddHandle != INVALID_HANDLE_VALUE) {
-            CloseHandle(g_vddHandle);
             g_vddHandle = INVALID_HANDLE_VALUE;
+            g_initialized.store(false, std::memory_order_release);
         }
 
+        if (stopEv) {
+            SetEvent(stopEv);
+        }
+
+        if (device != INVALID_HANDLE_VALUE) {
+            CancelIoEx(device, nullptr);
+        }
+
+        if (thread) {
+            WaitForSingleObject(thread, 1000);
+            CloseHandle(thread);
+        }
+
+        if (stopEv) {
+            CloseHandle(stopEv);
+        }
+
+        if (device != INVALID_HANDLE_VALUE) {
+            CloseHandle(device);
+        }
+
+        std::lock_guard<std::mutex> lock(g_mutex);
         g_monitors.clear();
         g_nextLogicalId = 1;
-        g_initialized = false;
     }
 
     int createVirtualMonitor(int width,
@@ -189,76 +250,37 @@ namespace fastmonitor {
                              int refreshHz,
                              const std::string& name) {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_initialized) {
+        if (!g_initialized.load(std::memory_order_acquire)) {
             return -1;
         }
 
-        int driverIndex = 0;
+        int driverIndex = -1;
 
         if (g_vddHandle != INVALID_HANDLE_VALUE) {
-            BYTE inBuf[0x20] = {};
-            BYTE outBuf[4]   = {};
-            OVERLAPPED ov{};
-            ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-            if (!ov.hEvent) {
+            // Official Parsec VDD protocol: ADD takes NO payload, returns driver slot index
+            DWORD idx = vdd_ioctl(g_vddHandle, VDD_IOCTL_ADD);
+            if (idx == static_cast<DWORD>(-1)) {
                 return -1;
             }
-
-            memcpy(&inBuf[0], &width,     sizeof(int));
-            memcpy(&inBuf[4], &height,    sizeof(int));
-            memcpy(&inBuf[8], &refreshHz, sizeof(int));
-
-            DWORD bytesReturned = 0;
-            BOOL ok = DeviceIoControl(
-                g_vddHandle,
-                VDD_IOCTL_ADD,
-                inBuf,
-                sizeof(inBuf),
-                outBuf,
-                sizeof(outBuf),
-                &bytesReturned,
-                &ov
-            );
-
-            if (!ok && GetLastError() == ERROR_IO_PENDING) {
-                ok = GetOverlappedResult(
-                    g_vddHandle,
-                    &ov,
-                    &bytesReturned,
-                    TRUE
-                );
-            }
-
-            CloseHandle(ov.hEvent);
-
-            if (!ok || bytesReturned < sizeof(DWORD)) {
-                return -1;
-            }
-
-            DWORD dIdx = 0;
-            memcpy(&dIdx, outBuf, sizeof(DWORD));
-            driverIndex = static_cast<int>(dIdx);
+            driverIndex = static_cast<int>(idx);
+            vdd_ioctl(g_vddHandle, VDD_IOCTL_UPDATE); // Immediate ping to prevent timeout
         } else {
-            // Emulation fallback when driver is not yet installed
+            // Emulation mode for testing when driver is absent
             driverIndex = static_cast<int>(g_monitors.size());
         }
 
         int logicalId = g_nextLogicalId++;
-        FastVirtualMonitor vm(logicalId,
-                              driverIndex,
-                              width,
-                              height,
-                              refreshHz,
-                              name);
-        vm.active = true;
+        g_monitors.emplace_back(logicalId, driverIndex, width, height, refreshHz, name);
 
-        g_monitors.push_back(vm);
+        // Apply Win32 display mode settings
+        apply_display_mode(driverIndex, width, height, refreshHz);
+
         return logicalId;
     }
 
     bool destroyVirtualMonitor(int logicalId) {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_initialized) {
+        if (!g_initialized.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -275,42 +297,12 @@ namespace fastmonitor {
         }
 
         if (g_vddHandle != INVALID_HANDLE_VALUE) {
-            BYTE inBuf[0x20] = {};
-            OVERLAPPED ov{};
-            ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-            if (!ov.hEvent) {
-                return false;
-            }
-
-            DWORD idx = static_cast<DWORD>(it->driverIndex);
-            memcpy(&inBuf[1], &idx, sizeof(DWORD));
-
-            DWORD bytesReturned = 0;
-            BOOL ok = DeviceIoControl(
-                g_vddHandle,
-                VDD_IOCTL_REMOVE,
-                inBuf,
-                sizeof(inBuf),
-                nullptr,
-                0,
-                &bytesReturned,
-                &ov
+            // Official protocol: 16-bit big-endian driver index
+            UINT16 beIdx = static_cast<UINT16>(
+                ((it->driverIndex & 0xFF) << 8) | ((it->driverIndex >> 8) & 0xFF)
             );
-
-            if (!ok && GetLastError() == ERROR_IO_PENDING) {
-                ok = GetOverlappedResult(
-                    g_vddHandle,
-                    &ov,
-                    &bytesReturned,
-                    TRUE
-                );
-            }
-
-            CloseHandle(ov.hEvent);
-
-            if (!ok) {
-                return false;
-            }
+            vdd_ioctl(g_vddHandle, VDD_IOCTL_REMOVE, &beIdx, sizeof(beIdx));
+            vdd_ioctl(g_vddHandle, VDD_IOCTL_UPDATE);
         }
 
         g_monitors.erase(it);
@@ -324,9 +316,10 @@ namespace fastmonitor {
         std::lock_guard<std::mutex> lock(g_mutex);
         for (auto& vm : g_monitors) {
             if (vm.logicalId == logicalId) {
-                vm.width     = width;
-                vm.height    = height;
+                vm.width = width;
+                vm.height = height;
                 vm.refreshHz = refreshHz;
+                apply_display_mode(vm.driverIndex, width, height, refreshHz);
                 return true;
             }
         }
@@ -357,29 +350,62 @@ namespace fastmonitor {
 
     std::string listVirtualMonitorsJson() {
         std::lock_guard<std::mutex> lock(g_mutex);
-        std::string json = "[";
+        std::string json;
+        json.reserve(1024);
+        json += "[";
+
         bool first = true;
         for (const auto& vm : g_monitors) {
-            if (!first) json += ",";
+            if (!first) {
+                json += ",";
+            }
             first = false;
-            json += "{";
-            json += "\"logicalId\":"  + std::to_string(vm.logicalId) + ",";
-            json += "\"driverIndex\":" + std::to_string(vm.driverIndex) + ",";
-            json += "\"width\":"      + std::to_string(vm.width) + ",";
-            json += "\"height\":"     + std::to_string(vm.height) + ",";
-            json += "\"refreshHz\":"  + std::to_string(vm.refreshHz) + ",";
-            json += "\"name\":\""     + vm.name + "\",";
-            json += "\"active\":"     + (vm.active ? std::string("true") : std::string("false"));
+            json += "{\"logicalId\":";
+            json += std::to_string(vm.logicalId);
+            json += ",\"driverIndex\":";
+            json += std::to_string(vm.driverIndex);
+            json += ",\"width\":";
+            json += std::to_string(vm.width);
+            json += ",\"height\":";
+            json += std::to_string(vm.height);
+            json += ",\"refreshHz\":";
+            json += std::to_string(vm.refreshHz);
+            json += ",\"name\":\"";
+
+            // JSON escape name
+            for (char c : vm.name) {
+                if (c == '"' || c == '\\') {
+                    json += '\\';
+                }
+                json += c;
+            }
+
+            json += "\",\"active\":";
+            json += vm.active ? "true" : "false";
             json += "}";
         }
         json += "]";
         return json;
     }
 
+    int driverVersion() {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_vddHandle == INVALID_HANDLE_VALUE) {
+            return 0;
+        }
+        DWORD ver = vdd_ioctl(g_vddHandle, VDD_IOCTL_VERSION);
+        return (ver != static_cast<DWORD>(-1)) ? static_cast<int>(ver) : 0;
+    }
+
+    bool isDriverPresent() {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        return g_vddHandle != INVALID_HANDLE_VALUE;
+    }
+
 } // namespace fastmonitor
 
 // ---------------------------------------------------------
-// JNI helpers & Bindings
+// JNI Helpers & Bindings
 // ---------------------------------------------------------
 
 jstring make_jstring(JNIEnv* env, const std::string& s) {
@@ -460,6 +486,18 @@ Java_fastmonitor_FastMonitorNative_deactivateVirtualMonitor(JNIEnv* env,
                                                             jint logicalId) {
     (void)env;
     return fastmonitor::deactivateVirtualMonitor(logicalId) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_fastmonitor_FastMonitorNative_isDriverPresent(JNIEnv* env, jclass) {
+    (void)env;
+    return fastmonitor::isDriverPresent() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_fastmonitor_FastMonitorNative_driverVersion(JNIEnv* env, jclass) {
+    (void)env;
+    return fastmonitor::driverVersion();
 }
 
 } // extern "C"
