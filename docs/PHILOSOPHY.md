@@ -27,6 +27,9 @@ Monitor creation, configuration, status polling, and topology management execute
 ### 5. Resilient Device State & Keepalive
 Windows IDD drivers often require periodic heartbeats or clean teardown upon process crashes. FastMonitor includes background keepalive thread management and graceful fallback handling so the desktop topology remains rock-solid.
 
+### 6. Streamer & Broadcast Privacy Isolation
+Live broadcasters, content creators, and corporate presenters require guaranteed isolation between what is visible on stream and what remains private. FastMonitor provides a dedicated, untainted virtual output surface for OBS Studio and capture cards, eliminating accidental leaks of Discord notifications, private chat tabs, or password dialogs.
+
 ---
 
 **⚡ FastMonitor — Powering the next generation of Native Java Display Management.**

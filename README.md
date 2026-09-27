@@ -108,12 +108,14 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 - 🔄 **Autonomous Driver Discovery & Watchdog** — Automated GUID interface enumeration and background keepalive heartbeat thread.
 - 🛡️ **Graceful Software Fallback** — Emulation mode ensures tests and higher-level code run reliably even before driver installation.
 - 🎯 **Seamless FastJava Synergy** — Direct pairing with FastScreen (2000 FPS capture), FastGPU (DX12 swapchains), and FastRobot (background input injection).
+- 🎙️ **Streamer & Broadcast Isolation** — Provision dedicated virtual display outputs for OBS Studio and capture cards, guaranteeing leak-free broadcasts without exposing private desktop notifications, chats, or credentials.
 - 📦 **Zero-Bloat Deployment** — Lightweight Java 17+ library with automated native DLL extraction via `FastCore`.
 
 ---
 
 ## Real-World Use Cases
 
+- 🎙️ **Streamer Privacy & Leak-Proof Broadcasts ([FastScreen](https://github.com/andrestubbe/FastScreen))**: Spin up an isolated 120–240 Hz virtual display as a pristine streaming canvas for OBS/Twitch/YouTube — broadcast games, tutorials, or slides at full framerate without the risk of accidentally revealing private Discord DMs, browser tabs, or desktop notifications.
 - 🤖 **Autonomous AI Agent Workspaces ([FastRobot](https://github.com/andrestubbe/FastRobot))**: Allocate dedicated virtual screens where AI agents can launch apps, click, and navigate without disturbing user desktop focus.
 - 📸 **Isolated Ultra-High-FPS Capture ([FastScreen](https://github.com/andrestubbe/FastScreen))**: Render and capture offscreen game or simulation frames at 240+ FPS without window interference.
 - 🎮 **DirectX & Vulkan Headless Pipelines ([FastGPU](https://github.com/andrestubbe/FastGPU) / [FastVulkan](https://github.com/andrestubbe/FastVulkan))**: Bind swapchains directly to dedicated virtual displays for ultra-low latency rendering.
