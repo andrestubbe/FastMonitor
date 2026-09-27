@@ -5,10 +5,12 @@ Future technical trajectory and milestones for **FastMonitor**.
 ---
 
 ## Phase 1: Core Foundation (Completed — v0.1.0)
-- [x] Basic Parsec-VDD / IDD JNI bridge via Win32 `DeviceIoControl`.
-- [x] Java 17 high-level API wrapper with `AutoCloseable` lifecycle.
-- [x] Background keepalive watchdog thread.
-- [x] Dynamic resolution and refresh rate reconfiguration.
+- [x] Hardened Parsec-VDD / IDD JNI bridge via Win32 `DeviceIoControl`.
+- [x] Payload-free `VDD_IOCTL_ADD` and 16-bit big-endian `VDD_IOCTL_REMOVE`.
+- [x] High-precision 100 ms keepalive thread without handle leaks.
+- [x] Java 17 high-level API wrapper with `AutoCloseable` and atomic lifecycle.
+- [x] Win32 CCD (`ChangeDisplaySettingsExA`) resolution and refresh rate mode configuration.
+- [x] Primitive zero-allocation `reconfigure(int, int, int)` hot-path.
 - [x] Automated MSVC build script with FastCore deployment.
 
 ---
@@ -18,6 +20,7 @@ Future technical trajectory and milestones for **FastMonitor**.
 - [ ] Explicit virtual monitor positioning (`SetDisplayConfig` coordinates).
 - [ ] Multi-adapter routing (binding virtual displays to specific discrete GPUs).
 - [ ] Custom orientation support (Portrait, Landscape Flipped).
+- [ ] Optional Java 22+ Foreign Function & Memory (FFM) direct downcall bindings.
 
 ---
 

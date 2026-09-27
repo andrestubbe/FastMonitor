@@ -59,8 +59,9 @@ public class Demo {
 - [Key Features](#key-features)
 - [Real-World Use Cases](#real-world-use-cases)
 - [Architecture & Pipeline](#architecture--pipeline)
+- [Architecture Decision: JNI vs. FFM](#architecture-decision-jni-vs-ffm)
 - [FastJava Ecosystem Synergy](#fastjava-ecosystem-synergy)
-- [Performance Guarantees](#performance-guarantees)
+- [Performance Characteristics](#performance-characteristics)
 - [API Quick Reference](#api-quick-reference)
 - [Driver Architecture & Integration](#driver-architecture--integration)
 - [Installation](#installation)
@@ -149,6 +150,16 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 
 ---
 
+## Architecture Decision: JNI vs. FFM
+
+FastMonitor intentionally relies on optimized **JNI** bindings backed by **FastCore** rather than Java 22+ Foreign Function & Memory (FFM):
+
+1. **Java 17 LTS Baseline Consistency**: The entire FastJava suite (140+ libraries) standardizes on Java 17 LTS as its supported baseline. FFM (`java.lang.foreign`) was only finalized in Java 22, which would break backward compatibility across enterprise and LTS deployments.
+2. **Encapsulation of Complex Win32 Driver Interfaces**: Interacting with Windows display drivers requires `SetupAPI` device enumeration with variable-length struct layouts (`SP_DEVICE_INTERFACE_DETAIL_DATA`), overlapped Win32 I/O, device IOCTL marshalling, and a native watchdog thread. Implementing these in pure Java FFM would require thousands of lines of fragile manual struct padding and off-heap memory management, whereas C++ compiles them cleanly into a hardened, high-performance binary.
+3. **Future Panama Upgrade Path**: FastCore already encapsulates FFM symbol lookups; once FastJava transitions its baseline beyond Java 21, FastMonitor can expose optional zero-glue FFM downcall handles without altering its public API.
+
+---
+
 ## FastJava Ecosystem Synergy
 
 FastMonitor integrates cleanly into the modular FastJava ecosystem:
@@ -161,15 +172,15 @@ FastMonitor integrates cleanly into the modular FastJava ecosystem:
 
 ---
 
-## Performance Guarantees
+## Performance Characteristics
 
 | Operation | Latency | Memory Impact | JNI Overhead |
 |:---|:---:|:---:|:---:|
 | **Backend Init** | < 1 ms | Zero persistent heap | Negligible |
-| **Virtual Monitor Creation** | 5–15 ms | Native driver struct | < 0.1 µs |
-| **Mode Reconfiguration** | < 1 ms | Zero allocation | < 0.1 µs |
-| **Keepalive Watchdog Ping** | 200 ms interval | Off-heap background thread | 0 JVM cycles |
-| **Display Teardown** | < 5 ms | Instant resource release | < 0.1 µs |
+| **Virtual Monitor Creation** | 2–8 ms | Stack-allocated IOCTL | < 0.1 µs |
+| **Mode Reconfiguration** | < 1 ms | Win32 CCD dispatch | < 0.1 µs |
+| **Keepalive Watchdog Ping** | 100 ms interval | Off-heap background thread | 0 JVM cycles |
+| **Display Teardown** | < 3 ms | Instant resource release | < 0.1 µs |
 
 ---
 
@@ -179,10 +190,13 @@ FastMonitor integrates cleanly into the modular FastJava ecosystem:
 |:---|:---|:---|
 | `FastMonitor.init()` | `boolean` | Initializes native backend and starts keepalive thread |
 | `FastMonitor.shutdown()` | `void` | Shuts down native backend and frees all display adapters |
+| `FastMonitor.isDriverPresent()` | `boolean` | Returns true if the physical Parsec VDD driver is installed |
+| `FastMonitor.driverVersion()` | `int` | Returns version reported by native driver, or 0 if emulation |
 | `FastMonitor.create(Config)` | `FastMonitor` | Creates and registers a new virtual monitor |
 | `id()` | `int` | Returns logical identifier of monitor |
 | `config()` | `Config` | Returns current resolution, refresh rate, and name |
-| `reconfigure(Config)` | `boolean` | Dynamically updates resolution and refresh rate |
+| `reconfigure(int, int, int)` | `boolean` | **Zero-GC**: Dynamically updates width, height, and refresh rate via primitives |
+| `reconfigure(Config)` | `boolean` | Dynamically updates resolution and refresh rate via Config |
 | `activate()` | `boolean` | Activates display output in Windows desktop topology |
 | `deactivate()` | `boolean` | Deactivates display output without destroying handle |
 | `destroy()` | `boolean` | Destroys virtual display and detaches from Windows |
