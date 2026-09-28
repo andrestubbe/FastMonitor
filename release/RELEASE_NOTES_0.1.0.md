@@ -1,16 +1,43 @@
-## FastMonitor 0.1.0
+# FastMonitor 0.1.0 — Initial Release
 
-### What's New
+FastMonitor is a Java 17 library for creating, configuring, activating, and removing virtual displays on Windows through the MikeTheTech Virtual Display Driver (MttVDD).
 
-- **Native Windows IDD Display Creation** — First release of FastMonitor, enabling dynamic creation and destruction of hardware-accelerated virtual displays directly from Java 17+.
-- **Parsec VDD User-Mode Driver Integration** — Directly interfaces with Parsec VDD via Win32 `DeviceIoControl` using overlapped I/O and automated device discovery.
-- **Zero GC Overhead** — Primitive handle management and off-heap state structures ensure zero JVM garbage collection pauses.
-- **Background Keepalive Watchdog** — Automated background heartbeat thread prevents Windows driver watchdog disconnects.
-- **Dynamic Reconfiguration** — Change resolution (up to 8K) and refresh rate (60–500 Hz) on running virtual monitors on-the-fly.
-- **AutoCloseable Lifecycle** — Idiomatic Java resource management with guaranteed cleanup of display adapters on shutdown.
+## What's Included
 
-### Related Projects
+- Java API for virtual monitor creation, activation, deactivation, reconfiguration, and cleanup.
+- MttVDD integration using its settings file and Windows Plug and Play APIs.
+- Driver setup downloads the pinned driver-only MttVDD and signed NefCon packages, verifies both archives with SHA-256, and uses normal Windows administrator approval.
+- The interactive demo creates a real Windows display output, pauses so it can be inspected in Display Settings, and removes its temporary device node on exit. The installed driver package remains available for later use.
+- Library users can use software-emulation mode when no VDD device is installed; this mode tracks monitors in memory and does not create Windows display outputs.
 
-- [FastScreen](https://github.com/andrestubbe/FastScreen) — Ultra-fast 2000 FPS DXGI Desktop Duplication
-- [FastGPU](https://github.com/andrestubbe/FastGPU) — DirectX 12 hardware acceleration for Java
-- [FastCore](https://github.com/andrestubbe/FastCore) — Native DLL extraction and OS abstraction layer
+## Requirements
+
+- Windows 10 or 11, x64
+- Java 17 or later
+- MikeTheTech VDD for real virtual displays; first-time setup requires an internet connection and Windows administrator approval
+
+## Installation with JitPack
+
+```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+
+<dependencies>
+    <dependency>
+        <groupId>com.github.andrestubbe</groupId>
+        <artifactId>FastMonitor</artifactId>
+        <version>0.1.0</version>
+    </dependency>
+    <dependency>
+        <groupId>com.github.andrestubbe</groupId>
+        <artifactId>FastCore</artifactId>
+        <version>0.1.0</version>
+    </dependency>
+</dependencies>
+```
+
+**Part of the FastJava Ecosystem** — *Making the JVM faster.* ⚡

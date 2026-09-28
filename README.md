@@ -276,8 +276,8 @@ $oem = (pnputil /enum-drivers | Select-String -Pattern "MttVDD.inf" -Context 1,0
 if ($oem) { pnputil /delete-driver $oem /uninstall /force }
 ```
 
-* **No driver installed?** FastMonitor automatically falls back to deterministic software emulation without crashing (`FastMonitor.isDriverPresent()` returns `false`).
-* **Driver installed?** Windows automatically exposes authentic DXGI display outputs up to 8K @ 500 Hz visible in Windows Display Settings.
+* **Using the library without a driver?** FastMonitor can initialize in deterministic software-emulation mode; it tracks monitors in memory and does not create a Windows display. `FastMonitor.isDriverPresent()` reports whether the VDD device is installed.
+* **Running the demo without a driver?** The demo tries to install the pinned driver and stops if installation is cancelled or fails. After initialization, it creates and activates a virtual monitor; Windows then exposes that monitor as a real display output in Display Settings, subject to the driver's supported modes.
 
 ---
 
@@ -319,13 +319,13 @@ MIT License — See [LICENSE](LICENSE) file for details.
 
 ## Related Projects
 
-- [🟢](https://jitpack.io/#andrestubbe/FastDisplay) [**FastDisplay**](https://github.com/andrestubbe/FastDisplay) — `0.1.1` · 59 views, 25 unique views, 33 clones, 5 unique clones, 1 star · [1](https://github.com/), [2](https://bing/)
-- [🟠](https://jitpack.io/#andrestubbe/FastMonitor) [**FastMonitor**](https://github.com/andrestubbe/FastMonitor) — version pending · 0 views, 0 unique views, 0 clones, 0 unique clones, 0 stars · [?]
-- [🟢](https://jitpack.io/#andrestubbe/FastTheme) [**FastTheme**](https://github.com/andrestubbe/FastTheme) — `0.1.6` · 37 views, 18 unique views, 7 clones, 2 unique clones, 0 stars · [9](https://duckduckgo/), [1](https://github.com/)
-- [🟢](https://jitpack.io/#andrestubbe/FastUI) [**FastUI**](https://github.com/andrestubbe/FastUI) — `0.1.0` · 30 views, 23 unique views, 3 clones, 2 unique clones, 0 stars · [?]
-- [🟢](https://jitpack.io/#andrestubbe/FastProportion) [**FastProportion**](https://github.com/andrestubbe/FastProportion) — `0.1.0` · 44 views, 24 unique views, 6 clones, 2 unique clones, 0 stars · [1](https://github.com/)
-- [🟢](https://jitpack.io/#andrestubbe/FastGrid) [**FastGrid**](https://github.com/andrestubbe/FastGrid) — `0.1.1` · 21 views, 16 unique views, 6 clones, 1 unique clone, 0 stars · [1](https://github.com/)
-- [🟢](https://jitpack.io/#andrestubbe/FastCore) [**FastCore**](https://github.com/andrestubbe/FastCore) — `0.1.0` · 3 views, 3 unique views, 0 clones, 0 unique clones, 1 star · [?]
+- [FastDisplay](https://github.com/andrestubbe/FastDisplay) — Native display monitoring and DPI API for Java
+- [FastMonitor](https://github.com/andrestubbe/FastMonitor) — Virtual display control for Java
+- [FastTheme](https://github.com/andrestubbe/FastTheme) — Native Windows styling and dynamic theming
+- [FastUI](https://github.com/andrestubbe/FastUI) — High-performance deterministic UI for Java
+- [FastProportion](https://github.com/andrestubbe/FastProportion) — Aspect-ratio scaling for Java
+- [FastGrid](https://github.com/andrestubbe/FastGrid) — Zero-allocation layout engine for Java
+- [FastCore](https://github.com/andrestubbe/FastCore) — Native library loader and FFM gateway for Java
 
 ---
 
