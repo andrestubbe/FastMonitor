@@ -78,6 +78,9 @@ cl /LD /EHsc /O2 /W3 /nologo ^
    user32.lib ^
    gdi32.lib ^
    setupapi.lib ^
+   cfgmgr32.lib ^
+   newdev.lib ^
+   shell32.lib ^
    /OUT:fastmonitor.dll ^
    /MACHINE:X64
 

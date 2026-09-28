@@ -2,48 +2,48 @@
 
 #include <jni.h>
 #include <windows.h>
+#include <cfgmgr32.h>
 #include <string>
 #include <vector>
 #include <atomic>
 #include <mutex>
 
-// Official Parsec VDD Constants & Protocol
-// Class GUID:   {4d36e968-e325-11ce-bfc1-08002be10318}
-// Adapter GUID: {00b41627-04c4-429e-a26e-0265cf50c8fa}
-static const GUID VDD_CLASS_GUID =
-{ 0x4d36e968, 0xe325, 0x11ce, { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } };
+// ─── MikeTheTech VDD (VirtualDrivers) constants ──────────────────────────────
+// Hardware ID used to locate the device in the PnP tree
+static constexpr const char* VDD_HARDWARE_ID       = "Root\\MttVDD";
+static constexpr const char* VDD_INSTANCE_ID        = "ROOT\\DISPLAY\\0000";
 
-static const GUID VDD_ADAPTER_GUID =
-{ 0x00b41627, 0x04c4, 0x429e, { 0xa2, 0x6e, 0x02, 0x65, 0xcf, 0x50, 0xc8, 0xfa } };
+// Default path written by the VDD installer
+static constexpr const char* VDD_INSTALL_DIR        = "C:\\VirtualDisplayDriver";
+static constexpr const char* VDD_SETTINGS_XML       = "C:\\VirtualDisplayDriver\\vdd_settings.xml";
 
-enum : DWORD {
-    VDD_IOCTL_ADD     = 0x0022e004,
-    VDD_IOCTL_REMOVE  = 0x0022a008,
-    VDD_IOCTL_UPDATE  = 0x0022a00c,
-    VDD_IOCTL_VERSION = 0x0022e010
-};
+// Maximum number of virtual monitors the driver supports
+static constexpr int VDD_MAX_MONITORS = 4;
 
-static constexpr size_t VDD_MAX_DISPLAYS = 8;
+// Milliseconds to wait after disable/enable for device to settle
+static constexpr DWORD VDD_RESTART_DISABLE_MS = 600;
+static constexpr DWORD VDD_RESTART_ENABLE_MS  = 2000;
 
+// ─── Monitor struct ───────────────────────────────────────────────────────────
 struct FastVirtualMonitor {
-    int logicalId;
-    int driverIndex;
-    int width;
-    int height;
-    int refreshHz;
+    int         logicalId;
+    int         slotIndex;      // 0-based index into driver's monitor list
+    int         width;
+    int         height;
+    int         refreshHz;
     std::string name;
-    std::string deviceName;
-    bool active;
+    std::string deviceName;     // e.g. "\\.\DISPLAY2" — filled after device restart
+    bool        active;
 
     FastVirtualMonitor(int logicalId_,
-                       int driverIndex_,
+                       int slotIndex_,
                        int w,
                        int h,
                        int hz,
-                       std::string n,
-                       std::string devName = "")
+                       std::string  n,
+                       std::string  devName = "")
         : logicalId(logicalId_),
-          driverIndex(driverIndex_),
+          slotIndex(slotIndex_),
           width(w),
           height(h),
           refreshHz(hz),
@@ -52,14 +52,15 @@ struct FastVirtualMonitor {
           active(true) {}
 };
 
+// ─── Public API ───────────────────────────────────────────────────────────────
 namespace fastmonitor {
     bool initBackend();
     void shutdownBackend();
 
-    int createVirtualMonitor(int width,
-                             int height,
-                             int refreshHz,
-                             const std::string& name);
+    int  createVirtualMonitor(int width,
+                              int height,
+                              int refreshHz,
+                              const std::string& name);
 
     bool destroyVirtualMonitor(int logicalId);
     bool configureVirtualMonitor(int logicalId,
@@ -71,9 +72,11 @@ namespace fastmonitor {
     bool deactivateVirtualMonitor(int logicalId);
 
     std::string listVirtualMonitorsJson();
-    int driverVersion();
+    int  driverVersion();
     bool isDriverPresent();
+    bool removeDriverDevice();
 }
 
-jstring make_jstring(JNIEnv* env, const std::string& s);
+// ─── JNI helpers ─────────────────────────────────────────────────────────────
+jstring     make_jstring(JNIEnv* env, const std::string& s);
 std::string jstring_to_std(JNIEnv* env, jstring js);

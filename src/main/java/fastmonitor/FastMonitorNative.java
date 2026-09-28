@@ -5,11 +5,12 @@ import fastcore.FastCore;
 /**
  * Low-level JNI bridge for FastMonitor.
  *
- * <p>Communicates directly with the native C++ user-mode display driver
- * subsystem and Parsec VDD kernel/UMDF interface via DeviceIoControl.</p>
+ * <p>Communicates directly with the native C++ backend which controls the
+ * MikeTheTech Virtual Display Driver (MttVDD) via XML configuration,
+ * Windows PnP device management, and device-node removal.</p>
  *
  * @author Andre Stubbe
- * @version 0.1.0
+ * @version 0.2.0
  * @since 2026-09-27
  */
 public final class FastMonitorNative {
@@ -27,7 +28,7 @@ public final class FastMonitorNative {
     }
 
     public static native boolean initBackend();
-    public static native void shutdownBackend();
+    public static native void    shutdownBackend();
 
     public static native int createVirtualMonitor(
             int width,
@@ -45,7 +46,7 @@ public final class FastMonitorNative {
             int refreshHz
     );
 
-    public static native String listVirtualMonitors();
+    public static native String  listVirtualMonitorsJson();
 
     public static native boolean activateVirtualMonitor(int logicalId);
 
@@ -53,5 +54,16 @@ public final class FastMonitorNative {
 
     public static native boolean isDriverPresent();
 
-    public static native int driverVersion();
+    /** Removes only the MttVDD device node, not the installed driver package. */
+    public static native boolean removeDriverDevice();
+
+    public static native boolean isEmulationMode();
+
+    public static native int     driverVersion();
+
+    /**
+     * Starts the staged driver-only install command with normal Windows elevation.
+     * Must be called before {@link #initBackend()}.
+     */
+    public static native boolean installDriver(String commandPath, String workingDirectory);
 }

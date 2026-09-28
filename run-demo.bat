@@ -2,6 +2,14 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+:: ── Require administrator rights (needed for driver install + device restart) ─
+net session >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo [FastMonitor] Requesting administrator privileges...
+    powershell -Command "Start-Process cmd -ArgumentList '/c \"%~f0\"' -Verb RunAs -WorkingDirectory '%~dp0'"
+    exit /b
+)
+
 echo [FastMonitor] Compiling Native C++ library...
 call compile.bat >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (

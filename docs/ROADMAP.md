@@ -4,13 +4,12 @@ Future technical trajectory and milestones for **FastMonitor**.
 
 ---
 
-## Phase 1: Core Foundation (Completed — v0.1.0)
-- [x] Hardened Parsec-VDD / IDD JNI bridge via Win32 `DeviceIoControl`.
-- [x] Payload-free `VDD_IOCTL_ADD` and 16-bit big-endian `VDD_IOCTL_REMOVE`.
-- [x] High-precision 100 ms keepalive thread without handle leaks.
-- [x] Java 17 high-level API wrapper with `AutoCloseable` and atomic lifecycle.
-- [x] Win32 CCD (`ChangeDisplaySettingsExA`) resolution and refresh rate mode configuration.
-- [x] Primitive zero-allocation `reconfigure(int, int, int)` hot-path.
+## Current MVP: MikeTheTech VDD (Completed)
+- [x] Native JNI bridge for MttVDD settings, Windows PnP restarts, display modes, and device removal.
+- [x] Java 17 monitor API with `AutoCloseable` lifecycle and emulation fallback.
+- [x] Automatic download of fixed MikeTheTech VDD and NefCon releases with SHA-256 verification.
+- [x] Driver-only installation with normal Windows administrator approval and no vendor setup wizard.
+- [x] Demo cleanup that removes the temporary MttVDD device node but retains the driver package.
 - [x] Automated MSVC build script with FastCore deployment.
 
 ---

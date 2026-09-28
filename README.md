@@ -104,7 +104,7 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 - 🖥️ **True Hardware-Accelerated Virtual Displays** — Genuine Windows display adapter outputs managed via IDD (Indirect Display Driver) UMDF subsystem.
 - ⚡ **Dynamic Refresh & Resolution Scaling** — Instantiate displays up to 8K (7680×4320) with refresh rates from 60 Hz to 500 Hz.
 - 🗑️ **Zero JVM Heap Churn** — Direct native JNI bindings with deterministic sub-microsecond control paths.
-- 🔄 **Autonomous Driver Discovery & Watchdog** — Automated GUID interface enumeration and background keepalive heartbeat thread.
+- 🔄 **Automatic VDD Setup & Cleanup** — Downloads verified MikeTheTech packages on demand and removes the temporary device node when the demo closes.
 - 🛡️ **Graceful Software Fallback** — Emulation mode ensures tests and higher-level code run reliably even before driver installation.
 - 🎯 **Seamless FastJava Synergy** — Direct pairing with FastScreen (2000 FPS capture), FastGPU (DX12 swapchains), and FastRobot (background input injection).
 - 🎙️ **Streamer & Broadcast Isolation** — Provision dedicated virtual display outputs for OBS Studio and capture cards, guaranteeing leak-free broadcasts without exposing private desktop notifications, chats, or credentials.
@@ -133,10 +133,10 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 ┌─────────────────────────────────────────────────────────────┐
 │            FastMonitor Native C++ Bridge (fastmonitor.dll)   │
 └──────────────────────────────┬──────────────────────────────┘
-                               │ Win32 DeviceIoControl (Overlapped I/O)
+                               │ Win32 PnP + VDD settings
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│          Parsec VDD / Windows Indirect Display Driver (IDD) │
+│              MikeTheTech VDD / Windows IDD (IddCx)          │
 └──────────────────────────────┬──────────────────────────────┘
                                │ IddCx / UMDF DWM Registration
                                ▼
@@ -153,10 +153,10 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 | Operation | Latency | Memory Impact | JNI Overhead |
 |:---|:---:|:---:|:---:|
 | **Backend Init** | < 1 ms | Zero persistent heap | Negligible |
-| **Virtual Monitor Creation** | 2–8 ms | Stack-allocated IOCTL | < 0.1 µs |
-| **Mode Reconfiguration** | < 1 ms | Win32 CCD dispatch | < 0.1 µs |
-| **Keepalive Watchdog Ping** | 100 ms interval | Off-heap background thread | 0 JVM cycles |
-| **Display Teardown** | < 3 ms | Instant resource release | < 0.1 µs |
+| **Virtual Monitor Creation** | VDD settings update | PnP device restart | JNI call |
+| **Mode Reconfiguration** | Win32 display mode change | Existing display device | JNI call |
+| **Driver Setup** | Download on demand | SHA-256 verified packages | Normal Windows approval |
+| **Demo Teardown** | Remove device node | Driver package retained | Windows PnP removal |
 
 ---
 
@@ -164,9 +164,9 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 
 | Method | Return Type | Description |
 |:---|:---|:---|
-| `FastMonitor.init()` | `boolean` | Initializes native backend and starts keepalive thread |
-| `FastMonitor.shutdown()` | `void` | Shuts down native backend and frees all display adapters |
-| `FastMonitor.isDriverPresent()` | `boolean` | Returns true if the physical Parsec VDD driver is installed |
+| `FastMonitor.init()` | `boolean` | Initializes the native MikeTheTech VDD backend |
+| `FastMonitor.shutdown()` | `void` | Shuts down the backend and clears remaining virtual monitor slots |
+| `FastMonitor.isDriverPresent()` | `boolean` | Returns true if the MikeTheTech VDD device node is present |
 | `FastMonitor.driverVersion()` | `int` | Returns version reported by native driver, or 0 if emulation |
 | `FastMonitor.create(Config)` | `FastMonitor` | Creates and registers a new virtual monitor |
 | `id()` | `int` | Returns logical identifier of monitor |
@@ -177,20 +177,14 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 | `deactivate()` | `boolean` | Deactivates display output without destroying handle |
 | `destroy()` | `boolean` | Destroys virtual display and detaches from Windows |
 | `close()` | `void` | AutoCloseable implementation delegating to `destroy()` |
+| `FastMonitor.removeDriverDevice()` | `boolean` | Removes the VDD device node after shutdown while retaining its driver package |
 | `FastMonitor.dumpAllMonitorsJson()` | `String` | Returns JSON status snapshot of all active monitors |
 
 ---
 
 ## Driver Architecture & Integration
 
-FastMonitor communicates with Windows Indirect Display Drivers conforming to the Microsoft IDD specification or the open-source **Parsec VDD** interface:
-
-- **Device Interface GUID**: `{00b41627-04c4-429e-a26e-0265cf50c8fa}`
-- **Device Class GUID**: `{4d36e968-e325-11ce-bfc1-08002be10318}`
-- **IOCTL Endpoints**:
-  - `VDD_IOCTL_ADD (0x0022e004)`: Register new virtual monitor with specified mode.
-  - `VDD_IOCTL_REMOVE (0x0022a008)`: Unregister virtual monitor.
-  - `VDD_IOCTL_UPDATE (0x0022a00c)`: 200 ms watchdog heartbeat ping.
+FastMonitor controls the MikeTheTech Virtual Display Driver (MttVDD), an Indirect Display Driver built on Microsoft's IddCx model. It writes the desired monitor count to `C:\VirtualDisplayDriver\vdd_settings.xml`, restarts the MttVDD PnP device so Windows applies the topology, and uses Windows display APIs to configure modes.
 
 ---
 
@@ -255,31 +249,24 @@ To create **genuine Windows OS display outputs** visible in Windows 10/11 Displa
 > [!IMPORTANT]
 > Without this driver, FastMonitor operates in **Emulation Mode** (software mock state for headless CI and unit tests). Installing this driver is required for real hardware-accelerated display outputs.
 
+When FastMonitor installs the driver, it downloads pinned driver-only and signed NefCon releases from GitHub, checks both archives against fixed SHA-256 hashes, and invokes NefCon without launching the MikeTheTech setup wizard. Windows still displays the normal administrator-consent prompt. The setup also adds the package's verified publisher certificate to the Local Machine Trusted Publishers store. FastMonitor starts the new driver with zero monitors so the host application can add one when activated.
+
 > [!NOTE]
-> FastMonitor interfaces with the standard Microsoft Indirect Display Driver (IDD) interface via the [Parsec VDD specification](https://github.com/nomi-san/parsec-vdd).
+> FastMonitor controls the [MikeTheTech Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) through its configuration file and Windows PnP APIs.
 
-#### Automated Driver Install (PowerShell as Administrator)
+#### Built-in Driver Setup
 
-```powershell
-# 1. Download official signed Virtual Display Driver (x64)
-Invoke-WebRequest -Uri "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.5.2/Signed-Driver-v24.12.24-x64.zip" -OutFile "$env:TEMP\vdd.zip"
-Expand-Archive -Path "$env:TEMP\vdd.zip" -DestinationPath "$env:TEMP\vdd" -Force
-
-# 2. Install and register IDD device via Device Console (pnputil)
-pnputil /add-driver "$env:TEMP\vdd\MttVDD.inf" /install
-
-# 3. Clean up temporary files
-Remove-Item -Path "$env:TEMP\vdd.zip", "$env:TEMP\vdd" -Recurse -Force
-```
+If the VDD device is missing, the demo automatically downloads the two pinned archives, verifies their hashes, then starts Windows `certutil` and the signed NefCon utility with normal administrator elevation. The installation step does not run PowerShell or the third-party setup wizard. When the demo exits, it clears the monitor count and removes the MttVDD device node; the driver package remains installed for the next run.
 
 #### Verification
 
-```powershell
-# Check if driver device interface is active
-Get-PnpDevice -FriendlyName "*Virtual Display*"
+```cmd
+pnputil /enum-devices /instanceid ROOT\DISPLAY\0000
 ```
 
-#### Uninstallation (PowerShell as Administrator)
+#### Optional Full Driver-Package Uninstallation (PowerShell as Administrator)
+
+The demo removes only the MttVDD device node when it exits. To also delete the driver package from Windows Driver Store, use:
 
 ```powershell
 # 1. Find the published INF name (e.g. oemXX.inf)
@@ -332,26 +319,13 @@ MIT License — See [LICENSE](LICENSE) file for details.
 
 ## Related Projects
 
-- [FastCore](https://github.com/andrestubbe/FastCore) — Native Library Loader & System Abstraction for Java
-- [FastScreen](https://github.com/andrestubbe/FastScreen) — Ultra-Fast 2000 FPS Screen Capture for Java
-- [FastImage](https://github.com/andrestubbe/FastImage) — Ultra-Fast Native SIMD Image Processing for Java
-- [FastWindow](https://github.com/andrestubbe/FastWindow) — Ultra-Fast Win32 Native Window Engine for Java
-- [FastGPU](https://github.com/andrestubbe/FastGPU) — DirectX 12 Hardware Acceleration for Java
-- [FastVulkan](https://github.com/andrestubbe/FastVulkan) — Low-Overhead Vulkan Compute and Graphics for Java
-- [FastOverlay](https://github.com/andrestubbe/FastOverlay) — Transparent Zero-Latency Desktop Overlays for Java
-- [FastDWM](https://github.com/andrestubbe/FastDWM) — Desktop Window Manager Integration & VSync Pacing
-- [FastRobot](https://github.com/andrestubbe/FastRobot) — High-Speed Native Automation & Input Injection for Java
-- [FastPointer](https://github.com/andrestubbe/FastPointer) — Zero-Overhead Native 64-Bit Memory Pointers for Java
-- [FastMemory](https://github.com/andrestubbe/FastMemory) — High-Performance Off-Heap Memory Primitives for Java
-- [FastSIMD](https://github.com/andrestubbe/FastSIMD) — AVX2/AVX-512 Vectorized Math for Java
-- [FastSharedMemory](https://github.com/andrestubbe/FastSharedMemory) — Inter-Process Zero-Copy Memory Sharing for Java
-- [FastAI](https://github.com/andrestubbe/FastAI) — High-Performance AI Pipeline Substrate for Java
-- [FastAIModel](https://github.com/andrestubbe/FastAIModel) — Low-Latency Onnx & LLM Inference Runtime for Java
-- [FastAIMatcher](https://github.com/andrestubbe/FastAIMatcher) — Real-Time Visual Template & Feature Matching for Java
-- [FastTouch](https://github.com/andrestubbe/FastTouch) — Native Multi-Touch Injection for Windows
-- [FastOCR](https://github.com/andrestubbe/FastOCR) — Ultra-Fast Native Optical Character Recognition for Java
-- [FastSTT](https://github.com/andrestubbe/FastSTT) — High-Speed Speech-to-Text Transcription for Java
-- [FastContentParse](https://github.com/andrestubbe/FastContentParse) — Ultra-Fast Multi-Format Document Parsing for Java
+- [🟢](https://jitpack.io/#andrestubbe/FastDisplay) [**FastDisplay**](https://github.com/andrestubbe/FastDisplay) — `0.1.1` · 59 views, 25 unique views, 33 clones, 5 unique clones, 1 star · [1](https://github.com/), [2](https://bing/)
+- [🟠](https://jitpack.io/#andrestubbe/FastMonitor) [**FastMonitor**](https://github.com/andrestubbe/FastMonitor) — version pending · 0 views, 0 unique views, 0 clones, 0 unique clones, 0 stars · [?]
+- [🟢](https://jitpack.io/#andrestubbe/FastTheme) [**FastTheme**](https://github.com/andrestubbe/FastTheme) — `0.1.6` · 37 views, 18 unique views, 7 clones, 2 unique clones, 0 stars · [9](https://duckduckgo/), [1](https://github.com/)
+- [🟢](https://jitpack.io/#andrestubbe/FastUI) [**FastUI**](https://github.com/andrestubbe/FastUI) — `0.1.0` · 30 views, 23 unique views, 3 clones, 2 unique clones, 0 stars · [?]
+- [🟢](https://jitpack.io/#andrestubbe/FastProportion) [**FastProportion**](https://github.com/andrestubbe/FastProportion) — `0.1.0` · 44 views, 24 unique views, 6 clones, 2 unique clones, 0 stars · [1](https://github.com/)
+- [🟢](https://jitpack.io/#andrestubbe/FastGrid) [**FastGrid**](https://github.com/andrestubbe/FastGrid) — `0.1.1` · 21 views, 16 unique views, 6 clones, 1 unique clone, 0 stars · [1](https://github.com/)
+- [🟢](https://jitpack.io/#andrestubbe/FastCore) [**FastCore**](https://github.com/andrestubbe/FastCore) — `0.1.0` · 3 views, 3 unique views, 0 clones, 0 unique clones, 1 star · [?]
 
 ---
 

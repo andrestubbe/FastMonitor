@@ -27,11 +27,12 @@ What `compile.bat` does automatically:
 1. Queries `vswhere.exe` to locate the latest installed Visual Studio (VS 2026 or VS 2022).
 2. Initializes the 64-bit developer environment (`vcvars64.bat`).
 3. Auto-detects `JAVA_HOME` if not already set.
-4. Compiles `native/fastmonitor.cpp` with `/O2` optimization and links against `user32.lib`, `gdi32.lib`, and `setupapi.lib`.
+4. Compiles `native/fastmonitor.cpp` with `/O2` optimization and links against the Windows display, PnP, SetupAPI, and device-installation libraries.
 5. Deploys `fastmonitor.dll` directly to:
    - `native/fastmonitor.dll`
    - `src/main/resources/native/fastmonitor.dll` (for inclusion inside JARs)
    - `%USERPROFILE%\.fastcore\native\fastmonitor\fastmonitor.dll` (for runtime lookup by FastCore)
+6. The JAR does not bundle driver packages. If the MttVDD device is missing, FastMonitor downloads fixed MikeTheTech VDD and NefCon release assets from GitHub, verifies their SHA-256 hashes, then requests normal Windows administrator approval for installation. Driver setup requires an internet connection; the installed driver package remains on the system after the demo removes its temporary device node.
 
 ---
 
@@ -61,6 +62,9 @@ cl /LD /EHsc /O2 /W3 /nologo ^
    user32.lib ^
    gdi32.lib ^
    setupapi.lib ^
+   cfgmgr32.lib ^
+   newdev.lib ^
+   shell32.lib ^
    /OUT:fastmonitor.dll ^
    /MACHINE:X64
 ```

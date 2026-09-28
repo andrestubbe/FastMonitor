@@ -16,9 +16,43 @@ public class Demo {
         System.out.println("=================================================");
         System.out.println();
 
+        if (!FastMonitor.isDriverPresent()) {
+            System.out.println("[INFO] No MikeTheTech virtual display driver is installed.");
+            System.out.println("[INFO] Starting the pinned driver-only installation using signed NefCon.");
+            System.out.println("[INFO] Windows may request administrator approval; no setup wizard will be launched.");
+            System.out.println("[INFO] Installing the signed driver-only package...");
+            if (!FastMonitor.installDriver()) {
+                System.err.println("[ERROR] Driver installation was cancelled or failed. Demo stopped.");
+                return;
+            }
+        }
+
         System.out.println("[INFO] Initializing FastMonitor backend...");
         boolean initialized = FastMonitor.init();
         System.out.println("[INFO] Backend initialized: " + initialized);
+        if (!initialized) {
+            System.err.println("[ERROR] FastMonitor could not initialize the virtual display backend.");
+            FastMonitor.shutdown();
+            boolean deviceRemoved = FastMonitor.removeDriverDevice();
+            if (deviceRemoved) {
+                System.out.println("[INFO] VDD device node removed after failed initialization; driver package retained.");
+            } else {
+                System.err.println("[WARN] VDD device node could not be removed after failed initialization.");
+            }
+            return;
+        }
+
+        boolean emulation = FastMonitor.isEmulationMode();
+        if (emulation) {
+            System.out.println("[WARN] Running in EMULATION MODE — no VDD driver found.");
+            System.out.println("[WARN] Monitors will be tracked in memory only (no real Windows display).");
+            System.out.println("[WARN] This demo requires the signed virtual display driver for a real display.");
+            FastMonitor.shutdown();
+            return;
+        } else {
+            System.out.println("[INFO] Hardware mode active — VDD driver present ✓");
+        }
+        System.out.println();
 
         Config initialConfig = new Config(1920, 1080, 60, "FastMonitor-Virtual-1");
         System.out.println("[INFO] Creating virtual monitor: " + initialConfig);
@@ -54,13 +88,25 @@ public class Demo {
             System.out.println("[INFO] Deactivating monitor...");
             monitor.deactivate();
 
-            System.out.println("[INFO] Closing monitor resources...");
+            System.out.println("[INFO] Removing the temporary virtual display...");
+            boolean removed = monitor.destroy();
+            if (removed) {
+                System.out.println("[SUCCESS] Temporary virtual display removed.");
+            } else {
+                System.err.println("[WARN] FastMonitor could not confirm display removal; shutdown will retry cleanup.");
+            }
         } catch (Exception e) {
             System.err.println("[ERROR] Failed to manage virtual monitor: " + e.getMessage());
             e.printStackTrace();
         } finally {
             FastMonitor.shutdown();
             System.out.println("[INFO] FastMonitor backend shut down cleanly.");
+            boolean deviceRemoved = FastMonitor.removeDriverDevice();
+            if (deviceRemoved) {
+                System.out.println("[SUCCESS] VDD device node removed; the driver package remains installed.");
+            } else {
+                System.err.println("[WARN] VDD device node could not be removed. See native diagnostics above.");
+            }
         }
 
         System.out.println();

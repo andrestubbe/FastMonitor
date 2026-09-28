@@ -1,8 +1,29 @@
 package fastmonitor;
 
 import java.util.Objects;
+import java.util.HexFormat;
+import java.util.Collection;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.time.Duration;
 
 /**
  * High-performance virtual monitor and display topology controller for Java.
@@ -16,6 +37,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @since 2026-09-27
  */
 public final class FastMonitor implements AutoCloseable {
+
+    private static final String VDD_ARCHIVE_SHA256 = "E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A";
+    private static final String NEFCON_ARCHIVE_SHA256 = "A15557DA24A9EFCA203158DE3B43B0EAF982DB231F0194031F1ED428BC13E669";
+    private static final String VDD_PUBLISHER_SHA1 = "3CF8CF26D8BA266C3A483AB7D26D4A818E317D76";
+    private static final String VDD_ARCHIVE_URL = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip";
+    private static final String NEFCON_ARCHIVE_URL = "https://github.com/nefarius/nefcon/releases/download/v1.14.0/nefcon_v1.14.0.zip";
+    private static final long MAX_INSTALL_ARCHIVE_BYTES = 32L * 1024L * 1024L;
+    private static final HttpClient DOWNLOAD_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(20))
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
 
     private static final AtomicBoolean INITIALIZED = new AtomicBoolean(false);
 
@@ -71,7 +103,10 @@ public final class FastMonitor implements AutoCloseable {
     /**
      * Initializes the native FastMonitor backend.
      *
-     * @return true if initialized successfully
+     * <p>This does not install a driver. Call {@link #installDriver()} explicitly
+     * from the application's activation/setup action when installation is needed.</p>
+     *
+     * @return {@code true} if initialized successfully
      */
     public static boolean init() {
         if (INITIALIZED.get()) {
@@ -81,6 +116,7 @@ public final class FastMonitor implements AutoCloseable {
             if (INITIALIZED.get()) {
                 return true;
             }
+
             boolean ok = FastMonitorNative.initBackend();
             if (ok) {
                 BACKEND_GENERATION.incrementAndGet();
@@ -88,6 +124,217 @@ public final class FastMonitor implements AutoCloseable {
             }
             return ok;
         }
+    }
+
+    /**
+     * Downloads hash-pinned MikeTheTech and NefCon packages, then installs the VDD with NefCon.
+     * Windows presents its normal administrator-consent prompt.
+     *
+     * @return {@code true} if the driver is installed and active after the call
+     */
+    public static boolean installDriver() {
+        if (FastMonitorNative.isDriverPresent()) {
+            return true;
+        }
+
+        Path tempDirectory = null;
+        try {
+            tempDirectory = Files.createTempDirectory("fastmonitor-vdd-");
+            Path driverZip = tempDirectory.resolve("VirtualDisplayDriver-x86.Driver.Only.zip");
+            Path nefconZip = tempDirectory.resolve("nefcon_v1.14.0.zip");
+            System.out.println("[FastMonitor] Downloading the pinned MikeTheTech VDD and NefCon packages...");
+            downloadVerifiedArchive(VDD_ARCHIVE_URL, driverZip, VDD_ARCHIVE_SHA256);
+            downloadVerifiedArchive(NEFCON_ARCHIVE_URL, nefconZip, NEFCON_ARCHIVE_SHA256);
+            Path driverDirectory = tempDirectory.resolve("driver");
+            extractZipEntry(driverZip, "VirtualDisplayDriver/MttVDD.inf", driverDirectory);
+            extractZipEntry(driverZip, "VirtualDisplayDriver/MttVDD.dll", driverDirectory);
+            Path catalog = extractZipEntry(driverZip, "VirtualDisplayDriver/mttvdd.cat", driverDirectory);
+            Path settingsSource = extractZipEntry(driverZip, "VirtualDisplayDriver/vdd_settings.xml", driverDirectory);
+            Path publisherCertificate = extractCatalogPublisher(catalog, tempDirectory.resolve("vdd-publisher.cer"));
+            Path nefcon = extractZipEntry(nefconZip, "x64/nefconw.exe", tempDirectory.resolve("nefcon"));
+
+            String settings = Files.readString(settingsSource, StandardCharsets.UTF_8);
+            Matcher count = Pattern.compile("<count>\\s*\\d+\\s*</count>").matcher(settings);
+            if (!count.find()) {
+                throw new java.io.IOException("The downloaded VDD settings file has no monitor count.");
+            }
+            Path zeroMonitorSettings = tempDirectory.resolve("vdd_settings.xml");
+            Files.writeString(zeroMonitorSettings, count.replaceFirst("<count>0</count>"), StandardCharsets.UTF_8);
+
+            Files.writeString(tempDirectory.resolve("install-vdd.cmd"), createInstallerCommand(), StandardCharsets.US_ASCII);
+
+            System.out.println("[FastMonitor] Installing through Windows certutil and signed NefCon (no PowerShell).");
+            boolean ok = FastMonitorNative.installDriver(
+                    tempDirectory.resolve("install-vdd.cmd").toString(), tempDirectory.toString());
+            if (ok) System.out.println("[FastMonitor] Virtual display driver installed.");
+            else {
+                Path systemLog = Path.of("C:\\ProgramData\\FastMonitor\\FastMonitor-vdd-install.log");
+                if (Files.isRegularFile(systemLog)) {
+                    Path retainedLog = Path.of(System.getProperty("java.io.tmpdir"),
+                            "FastMonitor-vdd-install.log");
+                    try {
+                        Files.copy(systemLog, retainedLog, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        System.err.println("[FastMonitor] Installer log: " + retainedLog);
+                    } catch (java.io.IOException e) {
+                        System.err.println("[FastMonitor] Could not preserve installer log: " + e.getMessage());
+                    }
+                }
+                System.err.println("[FastMonitor] Driver installation was cancelled or failed.");
+            }
+            return ok;
+        } catch (java.io.IOException | NoSuchAlgorithmException e) {
+            System.err.println("[FastMonitor] Driver package verification or extraction failed: " + e.getMessage());
+            return false;
+        } finally {
+            if (tempDirectory != null) {
+                deleteInstallTempDirectory(tempDirectory);
+            }
+        }
+    }
+
+    private static String createInstallerCommand() {
+        return new StringBuilder()
+                .append("@echo off\r\n")
+                .append("setlocal DisableDelayedExpansion\r\n")
+                .append("if not exist \"C:\\ProgramData\\FastMonitor\" mkdir \"C:\\ProgramData\\FastMonitor\" >nul 2>&1\r\n")
+                .append("set \"LOG=C:\\ProgramData\\FastMonitor\\FastMonitor-vdd-install.log\"\r\n")
+                .append("set \"RC=0\"\r\n")
+                .append("> \"%LOG%\" echo FastMonitor VDD driver-only installation started.\r\n")
+                .append("if exist \"C:\\VirtualDisplayDriver\\vdd_settings.xml\" goto settings_ready\r\n")
+                .append("if not exist \"C:\\VirtualDisplayDriver\" mkdir \"C:\\VirtualDisplayDriver\" >> \"%LOG%\" 2>&1\r\n")
+                .append("set \"RC=%ERRORLEVEL%\"\r\n")
+                .append("if not \"%RC%\"==\"0\" goto failed\r\n")
+                .append("copy /y \"vdd_settings.xml\" \"C:\\VirtualDisplayDriver\\vdd_settings.xml\" >> \"%LOG%\" 2>&1\r\n")
+                .append("set \"RC=%ERRORLEVEL%\"\r\n")
+                .append("if not \"%RC%\"==\"0\" goto failed\r\n")
+                .append(":settings_ready\r\n")
+                .append("certutil.exe -addstore -f TrustedPublisher \"vdd-publisher.cer\" >> \"%LOG%\" 2>&1\r\n")
+                .append("set \"RC=%ERRORLEVEL%\"\r\n")
+                .append("if not \"%RC%\"==\"0\" goto failed\r\n")
+                .append("\"nefcon\\nefconw.exe\" install \"driver\\MttVDD.inf\" \"Root\\MttVDD\" --no-duplicates >> \"%LOG%\" 2>&1\r\n")
+                .append("set \"RC=%ERRORLEVEL%\"\r\n")
+                .append("if not \"%RC%\"==\"0\" goto failed\r\n")
+                .append(">> \"%LOG%\" echo Driver installation command completed successfully.\r\n")
+                .append("exit /b 0\r\n")
+                .append(":failed\r\n")
+                .append(">> \"%LOG%\" echo Installation failed with exit code %RC%.\r\n")
+                .append("exit /b %RC%\r\n")
+                .toString();
+    }
+
+    private static Path extractZipEntry(Path archive, String entryName, Path destinationRoot)
+            throws java.io.IOException {
+        Files.createDirectories(destinationRoot);
+        try (InputStream input = Files.newInputStream(archive);
+             ZipInputStream zip = new ZipInputStream(input)) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (entryName.equals(entry.getName().replace('\\', '/'))) {
+                    String fileName = entryName.substring(entryName.lastIndexOf('/') + 1);
+                    Path destination = destinationRoot.resolve(fileName).normalize();
+                    if (!destination.startsWith(destinationRoot.toAbsolutePath().normalize())) {
+                        throw new java.io.IOException("Unsafe path in pinned installer archive.");
+                    }
+                    try (OutputStream output = Files.newOutputStream(destination)) {
+                        zip.transferTo(output);
+                    }
+                    zip.closeEntry();
+                    return destination;
+                }
+                zip.closeEntry();
+            }
+        }
+        throw new java.io.IOException("Required file is missing from pinned archive: " + entryName);
+    }
+
+    private static Path extractCatalogPublisher(Path catalog, Path destination)
+            throws java.io.IOException, NoSuchAlgorithmException {
+        Collection<? extends Certificate> certificates;
+        try (InputStream input = Files.newInputStream(catalog)) {
+            certificates = CertificateFactory.getInstance("X.509").generateCertificates(input);
+        } catch (java.security.cert.CertificateException e) {
+            throw new java.io.IOException("Could not read the signed VDD catalog certificates.", e);
+        }
+        MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+        for (Certificate certificate : certificates) {
+            if (certificate instanceof X509Certificate x509) {
+                try {
+                    byte[] encoded = x509.getEncoded();
+                    String thumbprint = HexFormat.of().withUpperCase().formatHex(sha1.digest(encoded));
+                    if (VDD_PUBLISHER_SHA1.equals(thumbprint)) {
+                        Files.write(destination, encoded);
+                        return destination;
+                    }
+                } catch (java.security.cert.CertificateEncodingException e) {
+                    throw new java.io.IOException("Could not encode the VDD publisher certificate.", e);
+                }
+            }
+        }
+        throw new java.io.IOException("The pinned VDD publisher certificate was not found in its catalog.");
+    }
+
+    private static void downloadVerifiedArchive(String url, Path destination, String expectedSha256)
+            throws java.io.IOException, NoSuchAlgorithmException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofMinutes(2))
+                .header("User-Agent", "FastMonitor")
+                .GET()
+                .build();
+
+        HttpResponse<InputStream> response;
+        try {
+            response = DOWNLOAD_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new java.io.IOException("Interrupted while downloading the pinned driver packages.", e);
+        }
+        if (response.statusCode() != 200) {
+            try (InputStream ignored = response.body()) { }
+            throw new java.io.IOException("Package download failed with HTTP status " + response.statusCode()
+                    + ": " + url);
+        }
+
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        long totalBytes = 0;
+        try (InputStream input = response.body(); OutputStream output = Files.newOutputStream(destination)) {
+            byte[] buffer = new byte[16 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                totalBytes += read;
+                if (totalBytes > MAX_INSTALL_ARCHIVE_BYTES) {
+                    throw new java.io.IOException("Downloaded driver package exceeds the size limit.");
+                }
+                digest.update(buffer, 0, read);
+                output.write(buffer, 0, read);
+            }
+        } catch (java.io.IOException e) {
+            Files.deleteIfExists(destination);
+            throw e;
+        }
+
+        String actualSha256 = HexFormat.of().withUpperCase().formatHex(digest.digest());
+        if (!expectedSha256.equals(actualSha256)) {
+            Files.deleteIfExists(destination);
+            throw new java.io.IOException("SHA-256 mismatch for downloaded package: " + url);
+        }
+    }
+
+    private static void deleteInstallTempDirectory(Path directory) {
+        try (java.util.stream.Stream<Path> paths = Files.walk(directory)) {
+            paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try { Files.deleteIfExists(path); } catch (java.io.IOException ignored) {}
+            });
+        } catch (java.io.IOException ignored) {
+            // Temporary files are not part of the installed driver.
+        }
+    }
+
+    /**
+     * Returns {@code true} if FastMonitor is running in emulation mode
+     * (no VDD driver installed — monitors are tracked in memory only).
+     */
+    public static boolean isEmulationMode() {
+        return FastMonitorNative.isEmulationMode();
     }
 
     /**
@@ -102,10 +349,22 @@ public final class FastMonitor implements AutoCloseable {
     }
 
     /**
-     * Checks if the physical Parsec VDD driver is present on this system.
+     * Removes the MikeTheTech VDD device node while retaining its driver package.
+     * Call only after {@link #shutdown()} and after all virtual monitors are destroyed.
+     *
+     * @return {@code true} if the device node is absent after the call
+     */
+    public static boolean removeDriverDevice() {
+        if (INITIALIZED.get()) {
+            throw new IllegalStateException("Shut down FastMonitor before removing its driver device.");
+        }
+        return FastMonitorNative.removeDriverDevice();
+    }
+
+    /**
+     * Checks if the MikeTheTech VDD driver is present on this system.
      */
     public static boolean isDriverPresent() {
-        init();
         return FastMonitorNative.isDriverPresent();
     }
 
@@ -261,7 +520,7 @@ public final class FastMonitor implements AutoCloseable {
         if (!INITIALIZED.get()) {
             return "[]";
         }
-        return FastMonitorNative.listVirtualMonitors();
+        return FastMonitorNative.listVirtualMonitorsJson();
     }
 
     private void checkNotClosed() {

@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Changed
+- Replaced the active Parsec VDD backend and setup documentation with the MikeTheTech VDD driver-only flow.
+- FastMonitor downloads pinned VDD and NefCon release assets on demand and verifies both archives with SHA-256 before installation.
+- The demo removes the temporary MttVDD device node at shutdown while retaining the driver package in Windows Driver Store.
+
+---
+
 ## [0.1.0] — 2026-09-27
 
 ### Added

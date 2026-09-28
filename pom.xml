@@ -66,6 +66,15 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <excludes>
+                    <!-- Retained locally for comparison; it is unsigned and must not ship. -->
+                    <exclude>driver/vdd-setup.exe</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Maven Compiler -->
             <plugin>
