@@ -42,6 +42,8 @@ if %ERRORLEVEL% NEQ 0 (
 echo [FastMonitor] Starting Visual Showcase Demo...
 set /p CP=<cp.txt
 java --enable-native-access=ALL-UNNAMED "-Djava.library.path=%~dp0src\main\resources\native;%~dp0release;%~dp0native" -cp "target\classes;%CP%" fastmonitor.Demo
+set "RC=%ERRORLEVEL%"
 
 cd ..\..
-pause
+if "%RC%"=="1" pause
+exit /b %RC%

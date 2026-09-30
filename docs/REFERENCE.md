@@ -11,7 +11,7 @@ FastMonitor targets the signed MikeTheTech Virtual Display Driver (MttVDD), a Wi
 *   The driver's root-enumerated device instance is `ROOT\DISPLAY\0000` with hardware ID `Root\MttVDD`.
 *   `installDriver()` downloads the pinned MikeTheTech VDD and NefCon release archives and checks their SHA-256 hashes before staging them for installation.
 *   VDD monitor slots are configured through `C:\VirtualDisplayDriver\vdd_settings.xml`; FastMonitor changes the monitor count and restarts the PnP device to apply it.
-*   FastMonitor uses Windows display APIs to apply resolution and refresh-rate modes to the resulting display outputs.
+*   FastMonitor stages per-display resolution and refresh-rate settings, then commits them through the Windows display API. Create/configure report failure if Windows rejects or cannot apply the requested mode.
 *   The VDD package supports the modes listed by its configuration and Windows display stack; FastMonitor validates requested values against its Java API bounds.
 
 ---
@@ -64,7 +64,8 @@ Encapsulates the virtual monitor properties:
 
 ## 4. Error Handling and Lifecycle
 
-1. **AutoCloseable**: Instances can be managed within `try-with-resources` blocks. Upon exit, `destroy()` removes the monitor slot from the VDD settings and restarts the device.
-2. **Backend Shutdown**: `shutdown()` sets any remaining VDD monitor count to zero and restarts the device as a final cleanup attempt.
-3. **Demo Device Cleanup**: After shutdown, the demo calls `removeDriverDevice()`. This removes the MttVDD device node while leaving its driver package in Windows Driver Store; the next demo run downloads and verifies the pinned packages, then recreates the node.
-4. **Graceful Fallback**: If the MttVDD device is absent, FastMonitor operates in software emulation mode without creating a Windows display.
+1. **AutoCloseable**: In hardware mode, destroy or close monitors in reverse creation order. MttVDD settings store only a monitor count, so FastMonitor refuses to remove a non-highest slot rather than risk removing a different physical display. `destroy()` returns `false` for an out-of-order request; `close()` reports it with `IllegalStateException`. Destroying the highest slot decrements the count and restarts the device.
+2. **Display modes**: `create()` adds the MttVDD slot and applies its requested mode before adding it to the Java-visible monitor state. If lookup or mode application fails, FastMonitor restores the previous monitor count and restarts the driver to remove the provisional slot. `reconfigure()` updates Java state only after Windows accepts the new mode; on failure it attempts to restore the previous Windows mode and returns `false`.
+3. **Backend Shutdown**: `shutdown()` sets any remaining VDD monitor count to zero and restarts the device as a final cleanup attempt.
+4. **Demo Device Cleanup**: After shutdown, the demo calls `removeDriverDevice()`. This removes the MttVDD device node while leaving its driver package in Windows Driver Store; the next demo run downloads and verifies the pinned packages, then recreates the node.
+5. **Graceful Fallback**: If the MttVDD device is absent, FastMonitor operates in software emulation mode without creating a Windows display.

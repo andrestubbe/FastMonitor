@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - FastMonitor downloads pinned VDD and NefCon release assets on demand and verifies both archives with SHA-256 before installation.
 - The demo removes the temporary MttVDD device node at shutdown while retaining the driver package in Windows Driver Store.
 
+### Fixed
+- Hardware monitor destruction now rejects non-highest VDD slots, preventing the count-only MttVDD configuration from removing a different display than requested.
+- Display creation/configuration now report Windows mode-application failures and roll back their provisional or in-memory configuration.
+
 ---
 
 ## [0.1.0] — 2026-09-27

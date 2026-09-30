@@ -168,15 +168,15 @@ Traditional approaches to multi-display automation, headless testing, and isolat
 | `FastMonitor.shutdown()` | `void` | Shuts down the backend and clears remaining virtual monitor slots |
 | `FastMonitor.isDriverPresent()` | `boolean` | Returns true if the MikeTheTech VDD device node is present |
 | `FastMonitor.driverVersion()` | `int` | Returns version reported by native driver, or 0 if emulation |
-| `FastMonitor.create(Config)` | `FastMonitor` | Creates and registers a new virtual monitor |
+| `FastMonitor.create(Config)` | `FastMonitor` | Creates a virtual monitor and applies its initial Windows display mode |
 | `id()` | `int` | Returns logical identifier of monitor |
 | `config()` | `Config` | Returns current resolution, refresh rate, and name |
-| `reconfigure(int, int, int)` | `boolean` | **Zero-GC**: Dynamically updates width, height, and refresh rate via primitives |
-| `reconfigure(Config)` | `boolean` | Dynamically updates resolution and refresh rate via Config |
+| `reconfigure(int, int, int)` | `boolean` | **Zero-GC**: Applies width, height, and refresh rate via primitives; returns `false` if Windows rejects the mode |
+| `reconfigure(Config)` | `boolean` | Applies the new resolution and refresh rate; keeps the previous configuration if Windows rejects the mode |
 | `activate()` | `boolean` | Activates display output in Windows desktop topology |
 | `deactivate()` | `boolean` | Deactivates display output without destroying handle |
-| `destroy()` | `boolean` | Destroys virtual display and detaches from Windows |
-| `close()` | `void` | AutoCloseable implementation delegating to `destroy()` |
+| `destroy()` | `boolean` | Destroys the highest-numbered VDD slot; destroy hardware monitors in reverse creation order |
+| `close()` | `void` | AutoCloseable cleanup; throws `IllegalStateException` if the hardware monitor order is invalid |
 | `FastMonitor.removeDriverDevice()` | `boolean` | Removes the VDD device node after shutdown while retaining its driver package |
 | `FastMonitor.dumpAllMonitorsJson()` | `String` | Returns JSON status snapshot of all active monitors |
 

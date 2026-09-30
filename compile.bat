@@ -99,11 +99,31 @@ echo [INFO] Output: native\fastmonitor.dll
 echo.
 
 :: Deploy to resources and fastcore cache
-if not exist "src\main\resources\native" mkdir "src\main\resources\native"
+if not exist "src\main\resources\native" (
+    mkdir "src\main\resources\native"
+    if errorlevel 1 (
+        echo [ERROR] Could not create the native resources directory.
+        exit /b 1
+    )
+)
 copy /Y "native\fastmonitor.dll" "src\main\resources\native\fastmonitor.dll" >nul
+if errorlevel 1 (
+    echo [ERROR] Could not deploy the native DLL to src\main\resources\native.
+    exit /b 1
+)
 
-if not exist "%USERPROFILE%\.fastcore\native\fastmonitor" mkdir "%USERPROFILE%\.fastcore\native\fastmonitor"
+if not exist "%USERPROFILE%\.fastcore\native\fastmonitor" (
+    mkdir "%USERPROFILE%\.fastcore\native\fastmonitor"
+    if errorlevel 1 (
+        echo [ERROR] Could not create the FastCore native cache directory.
+        exit /b 1
+    )
+)
 copy /Y "native\fastmonitor.dll" "%USERPROFILE%\.fastcore\native\fastmonitor\fastmonitor.dll" >nul
+if errorlevel 1 (
+    echo [ERROR] Could not deploy the native DLL to the FastCore cache: %USERPROFILE%\.fastcore\native\fastmonitor
+    exit /b 1
+)
 
 echo [INFO] Deployed fastmonitor.dll to resources and ~/.fastcore/native/fastmonitor/
 echo.

@@ -29,6 +29,22 @@
 #include <sstream>
 #include <fstream>
 #include <algorithm>
+#include <chrono>
+
+class ScopedTiming {
+public:
+    explicit ScopedTiming(const char* operation)
+        : operation_(operation), start_(std::chrono::steady_clock::now()) {}
+    ~ScopedTiming() {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start_).count();
+        std::fprintf(stderr, "[FastMonitor][TIMING] %s: %lld ms.\n",
+                operation_, static_cast<long long>(elapsed));
+    }
+private:
+    const char* operation_;
+    std::chrono::steady_clock::time_point start_;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Global state
@@ -110,37 +126,94 @@ static DEVINST find_vdd_devinst() {
     return dn;
 }
 
-/** Disable then re-enable the VDD device node to pick up XML changes. */
+/** Restart the VDD using Windows' supported PnPUtil command. */
+static bool restart_vdd_with_pnputil() {
+    char systemDirectory[MAX_PATH] = {};
+    const UINT length = GetSystemDirectoryA(systemDirectory, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        std::fprintf(stderr, "[FastMonitor] Could not locate the Windows system directory (error %lu).\n",
+                GetLastError());
+        return false;
+    }
+
+    const std::string executable = std::string(systemDirectory) + "\\pnputil.exe";
+    std::string commandLine = "\"" + executable + "\" /restart-device \"" + VDD_INSTANCE_ID + "\"";
+    std::vector<char> mutableCommand(commandLine.begin(), commandLine.end());
+    mutableCommand.push_back('\0');
+
+    STARTUPINFOA startup = {};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+    PROCESS_INFORMATION process = {};
+    if (!CreateProcessA(executable.c_str(), mutableCommand.data(), nullptr, nullptr, TRUE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+        std::fprintf(stderr, "[FastMonitor] Could not start PnPUtil (Win32 error %lu).\n", GetLastError());
+        return false;
+    }
+
+    const DWORD waitResult = WaitForSingleObject(process.hProcess, 60000);
+    if (waitResult != WAIT_OBJECT_0) {
+        const DWORD error = waitResult == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
+        TerminateProcess(process.hProcess, error);
+        WaitForSingleObject(process.hProcess, INFINITE);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        std::fprintf(stderr, "[FastMonitor] PnPUtil device restart did not finish (Win32 error %lu).\n", error);
+        return false;
+    }
+
+    DWORD exitCode = 1;
+    const BOOL gotExitCode = GetExitCodeProcess(process.hProcess, &exitCode);
+    const DWORD exitError = gotExitCode ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    if (!gotExitCode) {
+        std::fprintf(stderr, "[FastMonitor] PnPUtil could not restart MttVDD (exit code %lu).\n",
+                exitError);
+        return false;
+    }
+    if (exitCode == ERROR_SUCCESS_REBOOT_REQUIRED) {
+        std::fprintf(stderr,
+                "[FastMonitor] PnPUtil completed the device restart but reports that Windows may need a reboot; checking the current device state.\n");
+        return true;
+    }
+    if (exitCode != ERROR_SUCCESS) {
+        std::fprintf(stderr, "[FastMonitor] PnPUtil could not restart MttVDD (exit code %lu).\n", exitCode);
+        return false;
+    }
+    return true;
+}
+
+/** Restart the VDD device node to pick up XML changes, then wait until it is running. */
 static bool restart_vdd_device() {
+    ScopedTiming timing("native.restart_vdd_device (PnPUtil plus device readiness polling)");
     g_devInst = find_vdd_devinst();
     if (g_devInst == 0) {
         std::fprintf(stderr, "[FastMonitor] Cannot restart MttVDD: device node was not found.\n");
         return false;
     }
 
-    CONFIGRET cr = CM_Disable_DevNode(g_devInst, 0);
-    if (cr != CR_SUCCESS) {
-        std::fprintf(stderr, "[FastMonitor] CM_Disable_DevNode failed: CONFIGRET %lu.\n", (unsigned long)cr);
-        return false;
-    }
+    if (!restart_vdd_with_pnputil()) return false;
 
-    Sleep(VDD_RESTART_DISABLE_MS);
-
-    cr = CM_Enable_DevNode(g_devInst, 0);
-    if (cr != CR_SUCCESS) {
-        std::fprintf(stderr, "[FastMonitor] CM_Enable_DevNode failed: CONFIGRET %lu.\n", (unsigned long)cr);
-        return false;
-    }
-
-    Sleep(VDD_RESTART_ENABLE_MS);
-
-    // Re-acquire the node after restart; the old DEVINST may no longer be valid.
-    for (int attempt = 0; attempt < 15; ++attempt) {
+    // PnPUtil waits for the restart request. Recheck the devnode state before
+    // asking Windows to apply the updated display topology.
+    for (int attempt = 0; attempt < 30; ++attempt) {
         g_devInst = find_vdd_devinst();
-        if (g_devInst != 0) return true;
-        Sleep(200);
+        if (g_devInst != 0) {
+            ULONG status = 0, problem = 0;
+            if (CM_Get_DevNode_Status(&status, &problem, g_devInst, 0) == CR_SUCCESS &&
+                (status & DN_STARTED) != 0) {
+                return true;
+            }
+        }
+        Sleep(100);
     }
-    std::fprintf(stderr, "[FastMonitor] MttVDD did not reappear after device restart.\n");
+    std::fprintf(stderr, "[FastMonitor] MttVDD did not return to the started state after the PnPUtil restart.\n");
     return false;
 }
 
@@ -189,8 +262,44 @@ static std::string find_display_for_vdd_slot(int slotIndex) {
     return "";
 }
 
+/**
+ * A PnP restart can report completion before Windows publishes the updated
+ * display topology through EnumDisplayDevices. Wait briefly for the newly
+ * added slot instead of immediately rolling back a valid XML change.
+ */
+static std::string wait_for_display_for_vdd_slot(int slotIndex) {
+    ScopedTiming timing("native.wait_for_vdd_display_enumeration");
+    constexpr int attempts = 20;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        std::string deviceName = find_display_for_vdd_slot(slotIndex);
+        if (!deviceName.empty()) {
+            if (attempt > 0) {
+                std::fprintf(stderr,
+                        "[FastMonitor] VDD display for slot %d appeared after %d ms.\n",
+                        slotIndex, attempt * 100);
+            }
+            return deviceName;
+        }
+        if (attempt + 1 < attempts) Sleep(100);
+    }
+
+    std::fprintf(stderr,
+            "[FastMonitor] VDD display for slot %d was not enumerated after %d ms; attached display devices were:\n",
+            slotIndex, (attempts - 1) * 100);
+    DISPLAY_DEVICEA dd = {};
+    dd.cb = sizeof(dd);
+    for (DWORD i = 0; EnumDisplayDevicesA(nullptr, i, &dd, 0); ++i) {
+        std::fprintf(stderr, "[FastMonitor]   %s | %s | flags=0x%08lx\n",
+                dd.DeviceName, dd.DeviceString, dd.StateFlags);
+        dd = {};
+        dd.cb = sizeof(dd);
+    }
+    return "";
+}
+
 /** Apply resolution/refresh to a named display device. */
 static bool apply_display_mode(const std::string& deviceName, int w, int h, int hz) {
+    ScopedTiming timing("native.apply_display_mode (Windows mode commit)");
     if (deviceName.empty()) return false;
     DEVMODEA dm = {};
     dm.dmSize       = sizeof(dm);
@@ -198,9 +307,23 @@ static bool apply_display_mode(const std::string& deviceName, int w, int h, int 
     dm.dmPelsWidth  = (DWORD)w;
     dm.dmPelsHeight = (DWORD)h;
     dm.dmDisplayFrequency = (DWORD)hz;
-    return (ChangeDisplaySettingsExA(deviceName.c_str(), &dm, nullptr,
-                                     CDS_UPDATEREGISTRY | CDS_NORESET, nullptr)
-            == DISP_CHANGE_SUCCESSFUL);
+    const LONG staged = ChangeDisplaySettingsExA(deviceName.c_str(), &dm, nullptr,
+                                                  CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+    if (staged != DISP_CHANGE_SUCCESSFUL) {
+        std::fprintf(stderr, "[FastMonitor] Could not stage mode %dx%d@%d for %s (result %ld).\n",
+                w, h, hz, deviceName.c_str(), staged);
+        return false;
+    }
+
+    // CDS_NORESET records this device's mode without applying it. A final
+    // NULL-device call commits the staged display changes to Windows.
+    const LONG applied = ChangeDisplaySettingsExA(nullptr, nullptr, nullptr, 0, nullptr);
+    if (applied != DISP_CHANGE_SUCCESSFUL) {
+        std::fprintf(stderr, "[FastMonitor] Could not apply staged display mode for %s (result %ld).\n",
+                deviceName.c_str(), applied);
+        return false;
+    }
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +345,7 @@ static std::string escape_json(const std::string& s) {
 namespace fastmonitor {
 
 bool initBackend() {
+    ScopedTiming timing("native.initBackend");
     std::lock_guard<std::mutex> opLock(g_backendOpMutex);
     if (g_initialized.load()) return true;
 
@@ -256,6 +380,7 @@ bool initBackend() {
 }
 
 void shutdownBackend() {
+    ScopedTiming timing("native.shutdownBackend");
     std::lock_guard<std::mutex> opLock(g_backendOpMutex);
     if (!g_initialized.load()) return;
 
@@ -285,6 +410,7 @@ void shutdownBackend() {
 
 int createVirtualMonitor(int width, int height, int refreshHz,
                          const std::string& name) {
+    ScopedTiming timing("native.createVirtualMonitor");
     std::lock_guard<std::mutex> opLock(g_backendOpMutex);
     if (!g_initialized.load()) return -1;
 
@@ -315,9 +441,17 @@ int createVirtualMonitor(int width, int height, int refreshHz,
         return -1;
     }
 
-    std::string devName = find_display_for_vdd_slot(newSlot);
-    if (!devName.empty()) {
-        apply_display_mode(devName, width, height, refreshHz);
+    std::string devName = wait_for_display_for_vdd_slot(newSlot);
+    if (devName.empty() || !apply_display_mode(devName, width, height, refreshHz)) {
+        std::fprintf(stderr,
+                "[FastMonitor] Could not create monitor in VDD slot %d: its display mode could not be applied; rolling back the added slot.\n",
+                newSlot);
+        if (!write_monitor_count(xmlCount)) {
+            std::fprintf(stderr, "[FastMonitor] Create rollback could not restore VDD monitor count %d.\n", xmlCount);
+        } else if (!restart_vdd_device()) {
+            std::fprintf(stderr, "[FastMonitor] Create rollback restored the count but could not restart MttVDD; the extra display may remain until restart.\n");
+        }
+        return -1;
     }
 
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -327,6 +461,7 @@ int createVirtualMonitor(int width, int height, int refreshHz,
 }
 
 bool destroyVirtualMonitor(int logicalId) {
+    ScopedTiming timing("native.destroyVirtualMonitor");
     std::lock_guard<std::mutex> opLock(g_backendOpMutex);
     if (!g_initialized.load()) return false;
 
@@ -354,6 +489,12 @@ bool destroyVirtualMonitor(int logicalId) {
         std::fprintf(stderr, "[FastMonitor] Could not remove monitor %d: VDD settings count is %d.\n", logicalId, xmlCount);
         return false;
     }
+    if (mon->slotIndex != xmlCount - 1) {
+        std::fprintf(stderr,
+                "[FastMonitor] Could not remove monitor %d from VDD slot %d: MttVDD only supports removing the highest slot (current last slot is %d). Destroy monitors in reverse creation order.\n",
+                logicalId, mon->slotIndex, xmlCount - 1);
+        return false;
+    }
     if (!write_monitor_count(xmlCount - 1)) {
         std::fprintf(stderr, "[FastMonitor] Could not remove monitor %d: failed to write VDD settings.\n", logicalId);
         return false;
@@ -365,22 +506,13 @@ bool destroyVirtualMonitor(int logicalId) {
         return false;
     }
 
-    // Update slot indices for monitors that came after the removed one
+    // MttVDD represents the active set as a count, so only the last slot can
+    // be removed without recreating the remaining physical displays.
     std::lock_guard<std::mutex> lk(g_mutex);
-    int removedSlot = -1;
     for (auto it = g_monitors.begin(); it != g_monitors.end(); ++it) {
         if (it->logicalId == logicalId) {
-            removedSlot = it->slotIndex;
             g_monitors.erase(it);
             break;
-        }
-    }
-    if (removedSlot >= 0) {
-        for (auto& m : g_monitors) {
-            if (m.slotIndex > removedSlot) {
-                --m.slotIndex;
-                m.deviceName = find_display_for_vdd_slot(m.slotIndex);
-            }
         }
     }
     return true;
@@ -393,12 +525,23 @@ bool configureVirtualMonitor(int logicalId, int width, int height, int refreshHz
     std::lock_guard<std::mutex> lk(g_mutex);
     for (auto& m : g_monitors) {
         if (m.logicalId == logicalId) {
+            if (!g_emulationMode.load()) {
+                if (m.deviceName.empty()) {
+                    std::fprintf(stderr, "[FastMonitor] Could not configure monitor %d: no Windows display device is mapped to VDD slot %d.\n",
+                            logicalId, m.slotIndex);
+                    return false;
+                }
+                if (!apply_display_mode(m.deviceName, width, height, refreshHz)) {
+                    if (!apply_display_mode(m.deviceName, m.width, m.height, m.refreshHz)) {
+                        std::fprintf(stderr, "[FastMonitor] Configure rollback could not restore the previous mode for monitor %d.\n",
+                                logicalId);
+                    }
+                    return false;
+                }
+            }
             m.width     = width;
             m.height    = height;
             m.refreshHz = refreshHz;
-            if (!m.deviceName.empty()) {
-                apply_display_mode(m.deviceName, width, height, refreshHz);
-            }
             return true;
         }
     }
@@ -450,7 +593,63 @@ bool isDriverPresent() {
     return is_driver_installed();
 }
 
+static bool remove_vdd_device_with_uac() {
+    wchar_t systemDir[MAX_PATH] = {};
+    const UINT dirLength = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (dirLength == 0 || dirLength >= MAX_PATH) {
+        std::fprintf(stderr, "[FastMonitor] Could not locate Windows System32 for elevated VDD removal (Win32 error %lu).\n",
+                GetLastError());
+        return false;
+    }
+
+    const std::wstring pnputil = std::wstring(systemDir) + L"\\pnputil.exe";
+    const std::wstring parameters = L"/remove-device \"ROOT\\DISPLAY\\0000\"";
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = L"runas";
+    sei.lpFile = pnputil.c_str();
+    sei.lpParameters = parameters.c_str();
+    sei.lpDirectory = systemDir;
+    sei.nShow = SW_HIDE;
+
+    if (!ShellExecuteExW(&sei)) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_CANCELLED) {
+            std::fprintf(stderr, "[FastMonitor] User cancelled Windows approval to remove the temporary VDD device.\n");
+        } else {
+            std::fprintf(stderr, "[FastMonitor] Could not launch elevated VDD removal (Win32 error %lu).\n", error);
+        }
+        return false;
+    }
+    if (!sei.hProcess) {
+        std::fprintf(stderr, "[FastMonitor] Elevated VDD removal returned no process handle.\n");
+        return false;
+    }
+
+    const DWORD waitResult = WaitForSingleObject(sei.hProcess, INFINITE);
+    DWORD exitCode = 1;
+    const bool gotExitCode = waitResult == WAIT_OBJECT_0 && GetExitCodeProcess(sei.hProcess, &exitCode);
+    CloseHandle(sei.hProcess);
+    if (!gotExitCode || (exitCode != ERROR_SUCCESS && exitCode != ERROR_SUCCESS_REBOOT_REQUIRED)) {
+        std::fprintf(stderr, "[FastMonitor] Elevated pnputil device removal failed (wait=%lu, exit=%lu).\n",
+                waitResult, exitCode);
+        return false;
+    }
+
+    for (int attempt = 0; attempt < 25; ++attempt) {
+        if (find_vdd_devinst() == 0) {
+            std::fprintf(stderr, "[FastMonitor] VDD device node removed with Windows administrator approval; driver package retained.\n");
+            return true;
+        }
+        Sleep(200);
+    }
+    std::fprintf(stderr, "[FastMonitor] Elevated pnputil completed but the VDD device node is still present.\n");
+    return false;
+}
+
 bool removeDriverDevice() {
+    ScopedTiming timing("native.removeDriverDevice");
     std::lock_guard<std::mutex> opLock(g_backendOpMutex);
     if (g_initialized.load()) {
         std::fprintf(stderr, "[FastMonitor] Refusing to remove MttVDD while the backend is active.\n");
@@ -491,6 +690,9 @@ bool removeDriverDevice() {
     const DWORD error = removed ? ERROR_SUCCESS : GetLastError();
     SetupDiDestroyDeviceInfoList(devices);
     if (!removed) {
+        if (error == ERROR_ACCESS_DENIED) {
+            return remove_vdd_device_with_uac();
+        }
         std::fprintf(stderr, "[FastMonitor] DiUninstallDevice failed (Win32 error %lu).\n", error);
         return false;
     }
