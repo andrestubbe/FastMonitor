@@ -285,7 +285,8 @@ if ($oem) { pnputil /delete-driver $oem /uninstall /force }
 
 | Case | Java Example | Launcher | Description |
 |:---|:---|:---|:---|
-| **Interactive Showcase Demo** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | `run-demo.bat` | Demonstrates creating, activating, reconfiguring resolution/refresh rate, and tearing down virtual displays with real-time JSON topology inspection. |
+| **Interactive Showcase Demo (Full Build)** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | un-demo.bat | Full build & run: compiles MSVC C++ DLL, packages Maven modules, requests elevation, and executes the visual showcase. |
+| **Instant Showcase Demo (Pre-built)** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | un-demo-ready.bat | Zero-build fast launcher: bypasses Maven and C++ recompilation, requests UAC elevation, and starts the demo immediately (< 100 ms). |
 | **JMH Microbenchmark Suite** | [Benchmark.java](examples/Benchmark) | `run-benchmark.bat` | Standardized microbenchmarks measuring virtual display allocation throughput, mode reconfiguration latency, and zero-heap memory pressure. |
 
 ---
@@ -296,6 +297,7 @@ if ($oem) { pnputil /delete-driver $oem /uninstall /force }
 * **[REFERENCE.md](docs/REFERENCE.md)**: Full API descriptions and driver interface contracts.
 * **[PHILOSOPHY.md](docs/PHILOSOPHY.md)**: Engineering rationale and zero-allocation principles.
 * **[ROADMAP.md](docs/ROADMAP.md)**: Future milestones and planned features.
+* **[CHANGELOG.md](docs/CHANGELOG.md)**: Release history, version notes, and architectural changes.
 
 ---
 

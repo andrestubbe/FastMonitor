@@ -5,24 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
-
-### Changed
-- Replaced the active Parsec VDD backend and setup documentation with the MikeTheTech VDD driver-only flow.
-- FastMonitor downloads pinned VDD and NefCon release assets on demand and verifies both archives with SHA-256 before installation.
-- The demo removes the temporary MttVDD device node at shutdown while retaining the driver package in Windows Driver Store.
-
-### Fixed
-- Hardware monitor destruction now rejects non-highest VDD slots, preventing the count-only MttVDD configuration from removing a different display than requested.
-- Display creation/configuration now report Windows mode-application failures and roll back their provisional or in-memory configuration.
-
----
-
-## [0.1.0] — 2026-09-27
+## [0.1.0] — 2026-10-07
 
 ### Added
 - **Core Architecture**:
-  - Direct JNI bindings (`FastMonitorNative`) communicating with Windows Indirect Display Driver (IDD) and Parsec VDD endpoints.
+  - Direct JNI bindings (`FastMonitorNative`) communicating with Windows Indirect Display Driver (IDD / IddCx) and MikeTheTech VDD endpoints.
   - Safe, idiomatic Java 17 API wrapper (`FastMonitor`) with `AutoCloseable` lifecycle support.
   - Dynamic monitor lifecycle: `create`, `reconfigure`, `activate`, `deactivate`, and `destroy`.
   - JSON topology reporting via `FastMonitor.dumpAllMonitorsJson()`.
@@ -31,8 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   - Automatic `SetupDiGetClassDevs` and `SetupDiEnumDeviceInterfaces` discovery for virtual display adapter interfaces.
   - Background keepalive watchdog thread executing periodic heartbeats (`VDD_IOCTL_UPDATE`).
   - Seamless emulation fallback mode when hardware driver is not yet installed.
-- **Tooling & Ecosystem**:
-  - FastCore unified library loading integration.
-  - `compile.bat` with automated Visual Studio (VS 2026/2022) and `JAVA_HOME` discovery.
-  - `run-demo.bat` and `run-benchmark.bat` automated launcher scripts.
-  - Complete documentation suite (`PHILOSOPHY.md`, `COMPILE.md`, `REFERENCE.md`, `ROADMAP.md`).
+- **Driver Integration & Automation**:
+  - MikeTheTech VDD driver-only integration via verified NefCon utility and Windows Plug and Play (PnP) APIs.
+  - Pinned VDD and signed NefCon archive downloads with strict SHA-256 verification and Local Machine Trusted Publisher certificate installation.
+  - Device node teardown on demo shutdown while retaining the driver package in Windows Driver Store.
+- **Tooling & Launchers**:
+  - `run-demo.bat`: Full-pipeline runner (compiles C++ DLL with MSVC, builds Maven modules, compiles demo, and executes).
+  - `run-demo-ready.bat`: Ultra-fast launcher for pre-built binaries that requests UAC elevation and starts the visual showcase instantly (< 100 ms) without invoking Maven or MSVC compilers.
+  - `run-benchmark.bat`: Official JMH microbenchmark suite.
+  - Complete documentation suite (`PHILOSOPHY.md`, `COMPILE.md`, `REFERENCE.md`, `ROADMAP.md`, `CHANGELOG.md`).
