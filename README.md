@@ -285,8 +285,8 @@ if ($oem) { pnputil /delete-driver $oem /uninstall /force }
 
 | Case | Java Example | Launcher | Description |
 |:---|:---|:---|:---|
-| **Interactive Showcase Demo (Full Build)** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | un-demo.bat | Full build & run: compiles MSVC C++ DLL, packages Maven modules, requests elevation, and executes the visual showcase. |
-| **Instant Showcase Demo (Pre-built)** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | un-demo-ready.bat | Zero-build fast launcher: bypasses Maven and C++ recompilation, requests UAC elevation, and starts the demo immediately (< 100 ms). |
+| **Interactive Showcase Demo (Full Build)** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | `run-demo.bat` | Full build & run: compiles MSVC C++ DLL, packages Maven modules, requests elevation, and executes the visual showcase. |
+| **Instant Showcase Demo (Pre-built)** | [Demo.java](examples/Demo/src/main/java/fastmonitor/Demo.java) | `run-demo-ready.bat` | Zero-build fast launcher: bypasses Maven and C++ recompilation, requests UAC elevation, and starts the demo immediately (< 100 ms). |
 | **JMH Microbenchmark Suite** | [Benchmark.java](examples/Benchmark) | `run-benchmark.bat` | Standardized microbenchmarks measuring virtual display allocation throughput, mode reconfiguration latency, and zero-heap memory pressure. |
 
 ---
